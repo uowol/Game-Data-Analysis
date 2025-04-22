@@ -1,0 +1,5 @@
+data_collect:
+  queue: RANKED_SOLO_5x5
+  tier: DIAMOND
+  division: I
+  output_dir: outputs/
