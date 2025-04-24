@@ -1,3 +1,5 @@
+import yaml
+import psycopg2
 from typing import List
 from datetime import datetime, timedelta
 from components import base
@@ -10,13 +12,37 @@ class ComponentType(base.ComponentType):
 
 class Component(base.Component):
     def init(self, **config):
-        self.config = ComponentType(**config)
+        if config:
+            self.config = ComponentType(**config)
+        else:
+            with open("components/data_collect/config.yaml", 'r') as fp:
+                self.config = yaml.safe_load(fp)
+                self.config = self.config if self.config is not None else {}
 
-    def call(self, message: RequestDataCollect,
-             *, upstream_events: List[ResponseMessage] = []) -> ResponseDataCollect:
+
+    def call(self, message: RequestDataCollect, *args, **kwargs) -> ResponseDataCollect:
+        return self.call_postgres(message, *args, **kwargs)
+
+    def call_postgres(
+        self, 
+        message: RequestDataCollect, 
+        *,
+        upstream_events: List[ResponseMessage] = []
+    ) -> ResponseDataCollect:
         conn = postgres.get_connection()    # NOTE: with 문법을 사용할 경우 의도와 달리 트랜잭션으로 간주될 수 있음
-        postgres.init_database(conn)
         
+        # init database
+        for table in self.config['query']['create']['table']:
+            tables = postgres.ls_table(conn)
+            if table not in tables:
+                print(f"# [INFO] create table: {table}")
+                postgres.excute_query(conn, self.config['query']['create']['table'][table])
+        try:
+            postgres.excute_query(conn, self.config['query']['create']['db']['metabase'])
+        except psycopg2.errors.DuplicateDatabase:
+            print(f"[INFO] Metabase DB가 존재합니다.")
+        
+        # insert data
         league_data = riot_api.get_league_by_queue_tier_division(
             queue=message.queue,
             tier=message.tier,
@@ -42,30 +68,28 @@ class Component(base.Component):
             
             # insert: summoner
             print(f"# [INFO] insert summoner: {summoner_id}")
-            postgres.insert_data(
-                conn,
+            query = postgres.create_insert_query(
                 table_name='summoner',
                 columns=['summoner_id', 'puuid', 'game_name', 'game_tag'],
-                data=[summoner_id, puuid, game_name, game_tag],
                 primary_keys=['summoner_id']
             )
+            postgres.excute_query(conn, query, data=[summoner_id, puuid, game_name, game_tag])
             
             # insert: summoner_league
             print(f"# [INFO] insert summoner_league: {(league_id, summoner_id)}")
-            postgres.insert_data(
-                conn,
+            query = postgres.create_insert_query(
                 table_name='summoner_league',
                 columns=['league_id', 'summoner_id', 'tier', 'rank', 'league_points', 'veteran', 'inactive', 'fresh_blood', 'hot_streak'],
-                data=[league_id, summoner_id, tier, rank, league_points, veteran, inactive, fresh_blood, hot_streak],
                 primary_keys=['league_id', 'summoner_id']
             )
+            postgres.excute_query(conn, query, data=[league_id, summoner_id, tier, rank, league_points, veteran, inactive, fresh_blood, hot_streak])
             
-            # table: summoner_match, 당장의 summoner 뿐만 아니라 같은 경기의 모든 summoner의 게임을 한 번에 처리함
+            # TODO: 여기 로직이 조금 비효율적일 수 있음. 확인 필요
             summoner_matchids = riot_api.get_matchids_by_puuid(summoner['puuid'])
             for summoner_matchid in summoner_matchids:
                 summoner_match = riot_api.get_match_by_matchid(summoner_matchid)
                 match_id = summoner_match['metadata']['matchId']    # NOTE: 여기서 match_id가 이미 적재되어 있다면 패스하는 로직이 필요
-                
+
                 # NOTE: 임시, 현재 summoner_id의 summoner_index를 찾아 사용
                 summoner_index = -1
                 for i, x in enumerate(summoner_match['metadata']['participants']):   # NOTE: 리그는 맞는데, 최근 게임으로 칼바람 등이 들어올 수 있음
@@ -125,12 +149,15 @@ class Component(base.Component):
                 
                 # insert: summoner_match
                 print(f"# [INFO] insert summoner_match: {(match_id, summoner_id)}")
-                postgres.insert_data(
-                    conn,
+                query = postgres.create_insert_query(
                     table_name='summoner_match',
-                    columns=['match_id', 'summoner_id', 'team_id', 'end_of_game_result', 'game_start_timestamp', 'game_end_timestamp', 'game_duration', 'champion_id', 'champion_name', 'individual_position', 'team_position', 'summoner_spell1_id', 'summoner_spell2_id', 'summoner_spell1_casts', 'summoner_spell2_casts', 'kills', 'deaths', 'assists', 'longest_time_living', 'magic_damage_to_champion', 'physical_damage_to_champion', 'vision_score', 'wards_placed', 'wards_killed', 'baron_kills', 'dragon_kills', 'voidmonster_kills', 'gold_earned', 'item0_id', 'item1_id', 'item2_id', 'item3_id', 'item4_id', 'item5_id', 'item6_id','minion_cs','jungle_cs','game_ended_early_surrender','game_ended_surrender','kda','total_ping_count','primary_perk_style','primary_perk1','primary_perk2','primary_perk3','sub_perk_style','sub_perk1','sub_perk2'],
-                    data=[match_id, summoner_id, team_id, end_of_game_result, game_start_timestamp, game_end_timestamp, game_duration, champion_id, champion_name, individual_position, team_position, summoner_spell1_id, summoner_spell2_id, summoner_spell1_casts, summoner_spell2_casts, kills, deaths, assists, longest_time_living, magic_damage_to_champion, physical_damage_to_champion, vision_score, wards_placed, wards_killed, baron_kills, dragon_kills, voidmonster_kills, gold_earned, item0_id, item1_id, item2_id, item3_id, item4_id, item5_id,item6_id,minion_cs,jungle_cs,game_ended_early_surrender,game_ended_surrender,kda,total_ping_count,primary_perk_style,primary_perk1,primary_perk2,primary_perk3,sub_perk_style,sub_perk1,sub_perk2],
+                    columns=['match_id', 'summoner_id', 'team_id', 'end_of_game_result', 'game_start_timestamp', 'game_end_timestamp', 'game_duration', 'champion_id', 'champion_name', 'individual_position', 'team_position', 'summoner_spell1_id', 'summoner_spell2_id', 'summoner_spell1_casts', 'summoner_spell2_casts', 'kills', 'deaths', 'assists', 'longest_time_living', 'magic_damage_to_champion', 'physical_damage_to_champion', 'vision_score', 'wards_placed', 'wards_killed', 'baron_kills', 'dragon_kills', 'voidmonster_kills', 'gold_earned', 'item0_id', 'item1_id', 'item2_id', 'item3_id', 'item4_id', 'item5_id','item6_id','minion_cs','jungle_cs','game_ended_early_surrender','game_ended_surrender','kda','total_ping_count','primary_perk_style','primary_perk1','primary_perk2','primary_perk3','sub_perk_style','sub_perk1','sub_perk2'],
                     primary_keys=['match_id', 'summoner_id']
+                )
+                postgres.excute_query(
+                    conn, 
+                    query, 
+                    data=[match_id, summoner_id, team_id, end_of_game_result, game_start_timestamp, game_end_timestamp, game_duration, champion_id, champion_name, individual_position, team_position, summoner_spell1_id, summoner_spell2_id, summoner_spell1_casts, summoner_spell2_casts, kills, deaths, assists, longest_time_living, magic_damage_to_champion, physical_damage_to_champion, vision_score, wards_placed, wards_killed, baron_kills, dragon_kills, voidmonster_kills, gold_earned, item0_id, item1_id, item2_id, item3_id, item4_id, item5_id,item6_id,minion_cs,jungle_cs,game_ended_early_surrender,game_ended_surrender,kda,total_ping_count,primary_perk_style,primary_perk1,primary_perk2,primary_perk3,sub_perk_style,sub_perk1,sub_perk2]
                 )
             
         conn.close()

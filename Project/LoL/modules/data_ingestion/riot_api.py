@@ -47,18 +47,12 @@ def export_json(json_data, output_path):
         json.dump(json_data, f, indent=4)
 
 
-if __name__ == "__main__":
-    x = get_league_by_queue_tier_division("RANKED_SOLO_5x5", "DIAMOND", "I")
-    export_json(x, "modules/data_ingestion/output/league.json")
-    y = get_account_by_puuid(x[0]['puuid'])
-    export_json(y, "modules/data_ingestion/output/account.json")
-    z = get_matchids_by_puuid(x[0]['puuid'])
-    export_json(z, "modules/data_ingestion/output/matchids.json")
-    k = get_match_by_matchid(z[0])
-    export_json(k, "modules/data_ingestion/output/match.json")
-    
-    # print(z.keys())
-    # print(z['info'].keys())
-    # participants = z['metadata']['participants']
-    # y = get_matchlist_by_puuid(participants[0])
-    # print(y)
+# if __name__ == "__main__":
+#     x = get_league_by_queue_tier_division("RANKED_SOLO_5x5", "DIAMOND", "I")
+#     export_json(x, "modules/data_ingestion/output/league.json")
+#     y = get_account_by_puuid(x[0]['puuid'])
+#     export_json(y, "modules/data_ingestion/output/account.json")
+#     z = get_matchids_by_puuid(x[0]['puuid'])
+#     export_json(z, "modules/data_ingestion/output/matchids.json")
+#     k = get_match_by_matchid(z[0])
+#     export_json(k, "modules/data_ingestion/output/match.json")

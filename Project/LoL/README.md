@@ -1,5 +1,10 @@
 # ✨ **리그 오브 레전드 데이터 분석 프로젝트**
 
+## Inference
+```bash
+poetry run python -m scripts.run_pipeline --pipeline_path pipelines/default/pipeline.py --config_path pipelines/default/config.yaml
+```
+
 ## **1️⃣ 프로젝트 개요**
 **목표:**
 - **이탈자 분석 및 이상 탐지**를 위한 대시보드 구축
