@@ -31,6 +31,11 @@ def get_account_by_name_n_tag(name: str, tag: str):
     return get(url)
 
 
+def get_summoner_by_puuid(puuid: str):
+    url = f"https://kr.api.riotgames.com/lol/summoner/v4/summoners/by-puuid/{puuid}?api_key=" + os.getenv("RIOT_KEY")
+    return get(url)
+
+
 def get_matchids_by_puuid(puuid: str, *, startTime: int = 0, start: int = 0, count: int = 20):
     url = (
         f"https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?startTime={startTime}&start={start}&count={count}&api_key="
