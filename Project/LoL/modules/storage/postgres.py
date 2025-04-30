@@ -10,7 +10,7 @@ def get_connection():
         port="5432",
         dbname=os.getenv("DB_NAME", "dbname"),
         user=os.getenv("DB_USER", "user"),
-        password=os.getenv("DB_PSWD", "password")
+        password=os.getenv("DB_PSWD", "password"),
     )
     conn.autocommit = True
     return conn
@@ -33,13 +33,14 @@ def excute_query(conn, query, data=None):
 
 # Custom Functions
 def is_safe_db_name(name):
-    return re.match(r'^[a-zA-Z0-9_]+$', name) is not None
+    return re.match(r"^[a-zA-Z0-9_]+$", name) is not None
 
 
 def ls_table(conn, verbose=False):
     query = "SELECT table_name FROM information_schema.tables WHERE table_schema='public';"
     tables = excute_query(conn, query)
-    if verbose: print(tables)
+    if verbose:
+        print(tables)
     return tables
 
 

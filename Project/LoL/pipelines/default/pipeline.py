@@ -10,7 +10,7 @@ class PipelineType(base.PipelineType):
 
 class Pipeline(base.Pipeline):
     def init(self, **config):
-        self.config = PipelineType(**config)    # pydantic validation
+        self.config = PipelineType(**config)  # pydantic validation
 
     def call(self):
         upstream_events = []

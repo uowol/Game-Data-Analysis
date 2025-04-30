@@ -7,14 +7,14 @@ readme = "README.md"
 
 
 [tool.black]
-line-length = 88
+line-length = 120
 target-version = ['py312']
 skip-string-normalization = false
 
 
 [tool.isort]
 profile = "black"
-line_length = 88
+line_length = 120
 multi_line_output = 3
 include_trailing_comma = true
 
@@ -31,3 +31,4 @@ pandas = "^2.2.3"
 psycopg2 = "^2.9.10"
 pyaml = "^25.1.0"
 pydantic = "^2.11.2"
+pymongo = "^4.12.0"
