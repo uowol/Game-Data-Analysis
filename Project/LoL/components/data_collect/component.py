@@ -5,7 +5,7 @@ from typing import List
 from datetime import datetime, timedelta
 from components import base
 from modules.data_ingestion import riot_api
-from modules.storage import postgres, mongodb, duckdb
+from modules.storage import postgres, mongodb, duckdb, bigquery
 from components.formats import RequestDataCollect, ResponseDataCollect, ResponseMessage
 
 
@@ -23,7 +23,7 @@ class Component(base.Component):
                 self.config = self.config if self.config is not None else {}
 
     def call(self, message: RequestDataCollect, *args, **kwargs) -> ResponseDataCollect:
-        return self.call_duckdb(message, *args, **kwargs)
+        return self.call_bigquery(message, *args, **kwargs)
 
     def get_league_data(self, queue: str, tier: str, division: str):
         return riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division)
@@ -295,6 +295,128 @@ class Component(base.Component):
 
         # --- close duckdb connection ---
         conn.close()
+
+        return ResponseDataCollect(
+            queue=message.queue,
+            tier=message.tier,
+            division=message.division,
+            output_dir=message.output_dir,
+        )
+        
+    def call_bigquery(
+        self,
+        message: RequestDataCollect,
+        *,
+        upstream_events: List[ResponseMessage] = [],
+    ) -> ResponseDataCollect:
+        """_warning_
+
+        BigQuery는 외부키, 기본키 등의 여러 제약조건을 지원하지 않습니다.
+        따라서 해당 조건들은 명시적으로 제거하거나 수정해주어야합니다.
+        - FOREIGN KEY -> 제거
+        - PRIMARY KEY -> 제거
+        - VARCHAR -> STRING
+        - FLOAT -> FLOAT64
+        
+        """
+        
+        # --- get duckdb connection ---
+        collection = bigquery.get_client(r"D:\study-bigquery-458607-b0791a99fb28.json")
+        project_name = collection.project
+        dataset_name = "lol"
+        bigquery.create_dataset(collection, dataset_name)
+
+        # --- init database ---
+        for table in self.config["query"]["create"]["table"]:
+            print(f"# [INFO] init table: {table}")
+            query = self.config["query"]["create"]["table"][table]
+            if 'PRIMARY KEY ' in query:
+                query = query.split("PRIMARY KEY")[0].strip() + ')'
+            if "CONSTRAINT" in query:
+                query = query.split("CONSTRAINT")[0].strip() + ')'
+            query = query.replace(
+                "CREATE TABLE IF NOT EXISTS ", f"CREATE TABLE IF NOT EXISTS {project_name}.{dataset_name}."
+            ).replace(
+                " PRIMARY KEY", ""
+            ).replace(
+                " FOREIGN KEY", ""
+            ).replace(
+                "VARCHAR", "STRING"
+            ).replace(
+                "FLOAT", "FLOAT64"
+            )
+            bigquery.excute_query(collection, query)
+
+        # --- insert data ---
+        def format_value(val):
+            if isinstance(val, str):
+                return f"STRING"
+            elif isinstance(val, bool):
+                return 'TRUE' if val else 'FALSE'
+            elif val is None:
+                return 'NULL'
+            else:
+                return str(val)
+
+        league_data = self.get_league_data(message.queue, message.tier, message.division)
+        for summoner_league in league_data:
+            # table: summoner
+            summoner_data = self.get_summoner_data(summoner_league)
+
+            # table: summoner_league
+            summoner_league_data = self.get_summoner_league_data(summoner_league)
+
+            # insert: summoner
+            print(f"# [INFO] insert summoner: {summoner_data['summoner_id']}")
+            query = bigquery.create_insert_query(
+                table_name="summoner",
+                columns=summoner_data.keys(),
+                primary_keys=["summoner_id"],
+            )
+            job_config = bigquery.create_job_config(
+                data=[
+                    (col, format_value(summoner_data[col]), summoner_data[col]) for col in summoner_data.keys()
+                ]
+            )
+            bigquery.excute_query(collection, query, job_config=job_config)
+            raise Exception("test")
+
+            # insert: summoner_league
+            print(
+                f"# [INFO] insert summoner_league: {(summoner_league_data['league_id'], summoner_league_data['summoner_id'])}"
+            )
+            query = bigquery.create_insert_query(
+                table_name="summoner_league",
+                columns=summoner_league_data.keys(),
+                primary_keys=["summoner_id"],
+            )
+            bigquery.excute_query(
+                collection,
+                query,
+                params=list(summoner_league_data.values()),
+            )
+
+            summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
+            for summoner_matchid in summoner_matchids:
+                summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_data)
+
+                # insert: summoner_match
+                print(
+                    f"# [INFO] insert summoner_match: {(summoner_match_data['match_id'], summoner_match_data['summoner_id'])}"
+                )
+                query = bigquery.create_insert_query(
+                    table_name="summoner_match",
+                    columns=summoner_match_data.keys(),
+                    primary_keys=["summoner_id", "match_id"],
+                )
+                bigquery.excute_query(
+                    conn,
+                    query,
+                    params=list(summoner_match_data.values()),
+                )
+
+        # --- close bigquery connection ---
+        collection.close()
 
         return ResponseDataCollect(
             queue=message.queue,
