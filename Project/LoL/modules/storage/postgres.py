@@ -16,10 +16,10 @@ def get_connection():
     return conn
 
 
-def excute_query(conn, query, data=None):
+def excute_query(conn, query, params=None):
     cur = conn.cursor()
-    if data:
-        cur.execute(query, data)
+    if params:
+        cur.execute(query, params)
     else:
         cur.execute(query)
     res = None

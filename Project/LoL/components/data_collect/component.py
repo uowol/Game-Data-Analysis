@@ -1,11 +1,11 @@
+import os
 import yaml
 import psycopg2
 from typing import List
 from datetime import datetime, timedelta
 from components import base
 from modules.data_ingestion import riot_api
-from modules.storage import postgres
-from modules.storage import mongodb
+from modules.storage import postgres, mongodb, duckdb
 from components.formats import RequestDataCollect, ResponseDataCollect, ResponseMessage
 
 
@@ -23,7 +23,7 @@ class Component(base.Component):
                 self.config = self.config if self.config is not None else {}
 
     def call(self, message: RequestDataCollect, *args, **kwargs) -> ResponseDataCollect:
-        return self.call_mongodb(message, *args, **kwargs)
+        return self.call_duckdb(message, *args, **kwargs)
 
     def get_league_data(self, queue: str, tier: str, division: str):
         return riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division)
@@ -198,6 +198,111 @@ class Component(base.Component):
             output_dir=message.output_dir,
         )
 
+    def call_duckdb(
+        self,
+        message: RequestDataCollect,
+        *,
+        upstream_events: List[ResponseMessage] = [],
+    ) -> ResponseDataCollect:
+        """_warning_
+
+        DuckDB는 FOREGIN KEY를 선언만 가능하고 실제로 동작하지는 않습니다.
+        따라서, ON DELETE CASCADE 같은 옵션은 명시적으로 금지되어 있으며 무결성 처리가 필요하다면 직접 코드에서 처리해야 합니다.
+
+        """
+        
+        # --- get duckdb connection ---
+        conn = duckdb.get_connection('outputs/duckdb.db')
+
+        # --- init database ---
+        for table in self.config["query"]["create"]["table"]:
+            tables = duckdb.ls_table(conn)
+            if table not in tables:
+                print(f"# [INFO] create table: {table}")
+                duckdb.excute_query(conn, self.config["query"]["create"]["table"][table].replace(
+                    "ON DELETE CASCADE", ""
+                ))
+
+        # --- init metabase ---
+        # try:
+        #     duckdb.excute_query(conn, self.config["query"]["create"]["db"]["metabase"])
+        # except psycopg2.errors.DuplicateDatabase:
+        #     print(f"[INFO] Metabase DB가 존재합니다.")
+
+        # --- insert data ---
+        league_data = self.get_league_data(message.queue, message.tier, message.division)
+        for summoner_league in league_data:
+            # table: summoner
+            summoner_data = self.get_summoner_data(summoner_league)
+
+            # table: summoner_league
+            summoner_league_data = self.get_summoner_league_data(summoner_league)
+
+            # insert: summoner
+            print(f"# [INFO] insert summoner: {summoner_data['summoner_id']}")
+            query = duckdb.create_insert_query(
+                table_name="summoner",
+                columns=summoner_data.keys(),
+            )
+            duckdb.excute_query(conn, query, params=list(summoner_data.values()))
+
+            # insert: summoner_league
+            print(
+                f"# [INFO] insert summoner_league: {(summoner_league_data['league_id'], summoner_league_data['summoner_id'])}"
+            )
+            query = duckdb.create_insert_query(
+                table_name="summoner_league",
+                columns=summoner_league_data.keys(),
+            )
+            duckdb.excute_query(
+                conn,
+                query,
+                params=list(summoner_league_data.values()),
+            )
+
+            summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
+            for summoner_matchid in summoner_matchids:
+                summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_data)
+
+                # insert: summoner_match
+                print(
+                    f"# [INFO] insert summoner_match: {(summoner_match_data['match_id'], summoner_match_data['summoner_id'])}"
+                )
+                query = duckdb.create_insert_query(
+                    table_name="summoner_match",
+                    columns=summoner_match_data.keys(),
+                )
+                duckdb.excute_query(
+                    conn,
+                    query,
+                    params=list(summoner_match_data.values()),
+                )
+            
+            # --- save recent data ---
+            output_dir = os.path.join(message.output_dir, 'recent-1-summoner')
+            os.makedirs(output_dir, exist_ok=True)
+            
+            for table_name in self.config["query"]["create"]["table"]:
+                query = f"SELECT * FROM {table_name} WHERE summoner_id = ?"
+                if self.config["setting"]["save_format"] == "csv":
+                    duckdb.excute_query(conn, f"""
+                        COPY ({query}) TO '{output_dir}/{table_name}.csv' (DELIMITER ',', HEADER TRUE);
+                        """, params=[summoner_data["summoner_id"]])
+                if self.config["setting"]["save_format"] == "parquet":
+                    duckdb.excute_query(conn, f"""
+                        COPY ({query}) TO '{output_dir}/{table_name}.parquet' (FORMAT PARQUET);
+                        """, params=[summoner_data["summoner_id"]])
+
+        # --- close duckdb connection ---
+        conn.close()
+
+        return ResponseDataCollect(
+            queue=message.queue,
+            tier=message.tier,
+            division=message.division,
+            output_dir=message.output_dir,
+        )
+
     def call_postgres(
         self,
         message: RequestDataCollect,
@@ -236,7 +341,7 @@ class Component(base.Component):
                 columns=summoner_data.keys(),
                 primary_keys=["summoner_id"],
             )
-            postgres.excute_query(conn, query, data=list(summoner_data.values()))
+            postgres.excute_query(conn, query, params=list(summoner_data.values()))
 
             # insert: summoner_league
             print(
@@ -250,7 +355,7 @@ class Component(base.Component):
             postgres.excute_query(
                 conn,
                 query,
-                data=list(summoner_league_data.values()),
+                params=list(summoner_league_data.values()),
             )
 
             # TODO: 여기 로직이 조금 비효율적일 수 있음. 확인 필요
@@ -270,7 +375,7 @@ class Component(base.Component):
                 postgres.excute_query(
                     conn,
                     query,
-                    data=list(summoner_match_data.values()),
+                    params=list(summoner_match_data.values()),
                 )
 
         # --- close postgresql connection ---

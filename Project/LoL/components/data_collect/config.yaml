@@ -14,7 +14,7 @@ query:
       summoner_league: |
         CREATE TABLE IF NOT EXISTS summoner_league (
             league_id VARCHAR,
-            summoner_id VARCHAR,
+            summoner_id VARCHAR PRIMARY KEY,
             tier VARCHAR,
             rank VARCHAR,
             league_points INTEGER,
@@ -22,7 +22,6 @@ query:
             inactive BOOLEAN,
             fresh_blood BOOLEAN,
             hot_streak BOOLEAN,
-            PRIMARY KEY (league_id, summoner_id),
             
             CONSTRAINT fk_summoner
                 FOREIGN KEY (summoner_id)
@@ -86,3 +85,5 @@ query:
                 REFERENCES summoner(summoner_id)
                 ON DELETE CASCADE
         );
+setting:
+  save_format: csv # csv, parquet
