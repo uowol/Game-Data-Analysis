@@ -210,22 +210,20 @@ class Component(base.Component):
         따라서, ON DELETE CASCADE 같은 옵션은 명시적으로 금지되어 있으며 무결성 처리가 필요하다면 직접 코드에서 처리해야 합니다.
 
         """
-        
+
         # --- get duckdb connection ---
-        conn = duckdb.get_connection('outputs/duckdb.db')
+        conn = duckdb.get_connection("outputs/duckdb.db")
 
         # --- init database ---
-        for table in self.config["query"]["create"]["table"]:
+        for table in self.config["query"]["dwh"]["create"]["table"]:
             tables = duckdb.ls_table(conn)
             if table not in tables:
                 print(f"# [INFO] create table: {table}")
-                duckdb.excute_query(conn, self.config["query"]["create"]["table"][table].replace(
-                    "ON DELETE CASCADE", ""
-                ))
+                duckdb.excute_query(conn, self.config["query"]["dwh"]["create"]["table"][table])
 
         # --- init metabase ---
         # try:
-        #     duckdb.excute_query(conn, self.config["query"]["create"]["db"]["metabase"])
+        #     duckdb.excute_query(conn, self.config["query"]["dwh"]["create"]["db"]["metabase"])
         # except psycopg2.errors.DuplicateDatabase:
         #     print(f"[INFO] Metabase DB가 존재합니다.")
 
@@ -277,21 +275,29 @@ class Component(base.Component):
                     query,
                     params=list(summoner_match_data.values()),
                 )
-            
+
             # --- save recent data ---
-            output_dir = os.path.join(message.output_dir, 'recent-1-summoner')
+            output_dir = os.path.join(message.output_dir, "recent-1-summoner")
             os.makedirs(output_dir, exist_ok=True)
-            
-            for table_name in self.config["query"]["create"]["table"]:
+
+            for table_name in self.config["query"]["dwh"]["create"]["table"]:
                 query = f"SELECT * FROM {table_name} WHERE summoner_id = ?"
                 if self.config["setting"]["save_format"] == "csv":
-                    duckdb.excute_query(conn, f"""
+                    duckdb.excute_query(
+                        conn,
+                        f"""
                         COPY ({query}) TO '{output_dir}/{table_name}.csv' (DELIMITER ',', HEADER TRUE);
-                        """, params=[summoner_data["summoner_id"]])
+                        """,
+                        params=[summoner_data["summoner_id"]],
+                    )
                 if self.config["setting"]["save_format"] == "parquet":
-                    duckdb.excute_query(conn, f"""
+                    duckdb.excute_query(
+                        conn,
+                        f"""
                         COPY ({query}) TO '{output_dir}/{table_name}.parquet' (FORMAT PARQUET);
-                        """, params=[summoner_data["summoner_id"]])
+                        """,
+                        params=[summoner_data["summoner_id"]],
+                    )
 
         # --- close duckdb connection ---
         conn.close()
@@ -302,7 +308,7 @@ class Component(base.Component):
             division=message.division,
             output_dir=message.output_dir,
         )
-        
+
     def call_bigquery(
         self,
         message: RequestDataCollect,
@@ -317,9 +323,9 @@ class Component(base.Component):
         - PRIMARY KEY -> 제거
         - VARCHAR -> STRING
         - FLOAT -> FLOAT64
-        
+
         """
-        
+
         # --- get duckdb connection ---
         collection = bigquery.get_client(r"D:\study-bigquery-458607-b0791a99fb28.json")
         project_name = collection.project
@@ -327,23 +333,13 @@ class Component(base.Component):
         bigquery.create_dataset(collection, dataset_name)
 
         # --- init database ---
-        for table in self.config["query"]["create"]["table"]:
+        for table in self.config["query"]["dwh"]["create"]["table"]:
             print(f"# [INFO] init table: {table}")
-            query = self.config["query"]["create"]["table"][table]
-            if 'PRIMARY KEY ' in query:
-                query = query.split("PRIMARY KEY")[0].strip() + ')'
-            if "CONSTRAINT" in query:
-                query = query.split("CONSTRAINT")[0].strip() + ')'
-            query = query.replace(
-                "CREATE TABLE IF NOT EXISTS ", f"CREATE TABLE IF NOT EXISTS {project_name}.{dataset_name}."
-            ).replace(
-                " PRIMARY KEY", ""
-            ).replace(
-                " FOREIGN KEY", ""
-            ).replace(
-                "VARCHAR", "STRING"
-            ).replace(
-                "FLOAT", "FLOAT64"
+            query = (
+                self.config["query"]["dwh"]["create"]["table"][table]
+                .replace("CREATE TABLE IF NOT EXISTS ", f"CREATE TABLE IF NOT EXISTS {project_name}.{dataset_name}.")
+                .replace("VARCHAR", "STRING")
+                .replace("FLOAT", "FLOAT64")
             )
             bigquery.excute_query(collection, query)
 
@@ -352,9 +348,9 @@ class Component(base.Component):
             if isinstance(val, str):
                 return f"STRING"
             elif isinstance(val, bool):
-                return 'TRUE' if val else 'FALSE'
+                return "TRUE" if val else "FALSE"
             elif val is None:
-                return 'NULL'
+                return "NULL"
             else:
                 return str(val)
 
@@ -374,12 +370,9 @@ class Component(base.Component):
                 primary_keys=["summoner_id"],
             )
             job_config = bigquery.create_job_config(
-                data=[
-                    (col, format_value(summoner_data[col]), summoner_data[col]) for col in summoner_data.keys()
-                ]
+                data=[(col, format_value(summoner_data[col]), summoner_data[col]) for col in summoner_data.keys()]
             )
             bigquery.excute_query(collection, query, job_config=job_config)
-            raise Exception("test")
 
             # insert: summoner_league
             print(
@@ -390,11 +383,13 @@ class Component(base.Component):
                 columns=summoner_league_data.keys(),
                 primary_keys=["summoner_id"],
             )
-            bigquery.excute_query(
-                collection,
-                query,
-                params=list(summoner_league_data.values()),
+            job_config = bigquery.create_job_config(
+                data=[
+                    (col, format_value(summoner_league_data[col]), summoner_league_data[col])
+                    for col in summoner_league_data.keys()
+                ]
             )
+            bigquery.excute_query(collection, query, job_config=job_config)
 
             summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
             for summoner_matchid in summoner_matchids:
@@ -409,11 +404,13 @@ class Component(base.Component):
                     columns=summoner_match_data.keys(),
                     primary_keys=["summoner_id", "match_id"],
                 )
-                bigquery.excute_query(
-                    conn,
-                    query,
-                    params=list(summoner_match_data.values()),
+                job_config = bigquery.create_job_config(
+                    data=[
+                        (col, format_value(summoner_match_data[col]), summoner_match_data[col])
+                        for col in summoner_match_data.keys()
+                    ]
                 )
+                bigquery.excute_query(collection, query, job_config=job_config)
 
         # --- close bigquery connection ---
         collection.close()
@@ -435,15 +432,15 @@ class Component(base.Component):
         conn = postgres.get_connection()  # NOTE: with 문법을 사용할 경우 의도와 달리 트랜잭션으로 간주될 수 있음
 
         # --- init database ---
-        for table in self.config["query"]["create"]["table"]:
+        for table in self.config["query"]["db"]["create"]["table"]:
             tables = postgres.ls_table(conn)
             if table not in tables:
                 print(f"# [INFO] create table: {table}")
-                postgres.excute_query(conn, self.config["query"]["create"]["table"][table])
+                postgres.excute_query(conn, self.config["query"]["db"]["create"]["table"][table])
 
         # --- init metabase ---
         try:
-            postgres.excute_query(conn, self.config["query"]["create"]["db"]["metabase"])
+            postgres.excute_query(conn, self.config["query"]["db"]["create"]["db"]["metabase"])
         except psycopg2.errors.DuplicateDatabase:
             print(f"[INFO] Metabase DB가 존재합니다.")
 

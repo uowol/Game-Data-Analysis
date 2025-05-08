@@ -4,8 +4,9 @@ import duckdb
 
 # Base Functions
 def get_connection(db_path=None):
-    conn = duckdb.connect(db_path) if db_path else duckdb.connect(':memory:')
+    conn = duckdb.connect(db_path) if db_path else duckdb.connect(":memory:")
     return conn
+
 
 def excute_query(conn, query, params=None):
     if params:
@@ -30,7 +31,7 @@ def ls_table(conn, verbose=False):
 
 
 def create_insert_query(table_name, columns):
-    # 참고: DuckDB는 ON CONFLICT 구문을 지원하지 않고, Python API에서 %s 대신 ? 또는 :param 형태의 placeholder를 사용합니다.
+    # 참고: DuckDB는 Python API에서 %s 대신 ? 또는 :param 형태의 placeholder를 사용합니다.
     query = f"""
     INSERT OR REPLACE INTO {table_name} ({", ".join(columns)})
     VALUES ({", ".join(["?"] * len(columns))});
