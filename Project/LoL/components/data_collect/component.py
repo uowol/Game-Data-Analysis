@@ -1,11 +1,10 @@
 import os
 import yaml
-import psycopg2
 from typing import List
 from datetime import datetime, timedelta
 from components import base
 from modules.data_ingestion import riot_api
-from modules.storage import postgres, mongodb, duckdb, bigquery
+from modules.storage import duckdb
 from components.formats import RequestDataCollect, ResponseDataCollect, ResponseMessage
 
 
@@ -23,7 +22,103 @@ class Component(base.Component):
                 self.config = self.config if self.config is not None else {}
 
     def call(self, message: RequestDataCollect, *args, **kwargs) -> ResponseDataCollect:
-        return self.call_bigquery(message, *args, **kwargs)
+        # --- get duckdb connection ---
+        os.makedirs("../../metabase/data", exist_ok=True)
+        conn = duckdb.get_connection("../../metabase/data/duckdb.db")
+
+        # --- init database ---
+        for table in self.config["query"]["dwh"]["create"]["table"]:
+            tables = duckdb.ls_table(conn)
+            if table not in tables:
+                print(f"# [INFO] create table: {table}")
+                duckdb.excute_query(conn, self.config["query"]["dwh"]["create"]["table"][table])
+        
+        # --- insert data ---
+        league_data = self.get_league_data(message.queue, message.tier, message.division)
+        for summoner_league in league_data:
+            # table: summoner
+            summoner_data = self.get_summoner_data(summoner_league)
+
+            # table: summoner_league
+            summoner_league_data = self.get_summoner_league_data(summoner_league)
+
+            # insert: summoner
+            print(f"# [INFO] insert summoner: {summoner_data['summoner_id']}")
+            query = duckdb.create_insert_query(
+                table_name="summoner",
+                columns=summoner_data.keys(),
+            )
+            duckdb.excute_query(conn, query, params=list(summoner_data.values()))
+
+            # insert: summoner_league
+            print(
+                f"# [INFO] insert summoner_league: {(summoner_league_data['league_id'], summoner_league_data['summoner_id'])}"
+            )
+            query = duckdb.create_insert_query(
+                table_name="summoner_league",
+                columns=summoner_league_data.keys(),
+            )
+            duckdb.excute_query(
+                conn,
+                query,
+                params=list(summoner_league_data.values()),
+            )
+
+            summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
+            for summoner_matchid in summoner_matchids:
+                summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_data)
+
+                # insert: summoner_match
+                print(
+                    f"# [INFO] insert summoner_match: {(summoner_match_data['match_id'], summoner_match_data['summoner_id'])}"
+                )
+                query = duckdb.create_insert_query(
+                    table_name="summoner_match",
+                    columns=summoner_match_data.keys(),
+                )
+                duckdb.excute_query(
+                    conn,
+                    query,
+                    params=list(summoner_match_data.values()),
+                )
+
+            # --- save recent data ---
+            output_dir = os.path.join(message.output_dir, "recent-1-summoner")
+            os.makedirs(output_dir, exist_ok=True)
+
+            for table_name in self.config["query"]["dwh"]["create"]["table"]:
+                query = f"SELECT * FROM {table_name} WHERE summoner_id = ?"
+                if self.config["setting"]["save_format"] == "csv":
+                    duckdb.excute_query(
+                        conn,
+                        f"""
+                        COPY ({query}) TO '{output_dir}/{table_name}.csv' (DELIMITER ',', HEADER TRUE);
+                        """,
+                        params=[summoner_data["summoner_id"]],
+                    )
+                if self.config["setting"]["save_format"] == "parquet":
+                    duckdb.excute_query(
+                        conn,
+                        f"""
+                        COPY ({query}) TO '{output_dir}/{table_name}.parquet' (FORMAT PARQUET);
+                        """,
+                        params=[summoner_data["summoner_id"]],
+                    )
+
+        # --- close duckdb connection ---
+        conn.close()
+        
+        # --- init metabase ---
+        # duckdb.docker_build_metabase()    # if need to build metabase image
+        # duckdb.docker_run_metabase()        # if it already started, it will be passed
+
+
+        return ResponseDataCollect(
+            queue=message.queue,
+            tier=message.tier,
+            division=message.division,
+            output_dir=message.output_dir,
+        )
 
     def get_league_data(self, queue: str, tier: str, division: str):
         return riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division)
@@ -141,368 +236,3 @@ class Component(base.Component):
                 "perk"
             ],
         }
-
-    def call_mongodb(
-        self,
-        message: RequestDataCollect,
-        *,
-        upstream_events: List[ResponseMessage] = [],
-    ) -> ResponseDataCollect:
-        # --- get mongodb connection ---
-        client = mongodb.get_client()
-        db = mongodb.get_database(client, "lol")
-        collection = mongodb.get_collection(db, "summoners")
-
-        # --- insert data ---
-        league_data = self.get_league_data(message.queue, message.tier, message.division)
-        for summoner_league in league_data:
-            summoner_data = self.get_summoner_data(summoner_league)
-            summoner_league_data = self.get_summoner_league_data(summoner_league)
-
-            mongodb.update(collection, {"_id": summoner_data["summoner_id"]}, summoner_data)
-            mongodb.update(
-                collection,
-                {"_id": summoner_data["summoner_id"]},
-                {
-                    "league": summoner_league_data,
-                },
-            )
-
-            summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
-            summoner_match_data = []
-            for summoner_matchid in summoner_matchids:
-                data = self.get_summoner_match_data(summoner_matchid, summoner_data)
-                data["game_start_timestamp"] = data["game_start_timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-                data["game_end_timestamp"] = data["game_end_timestamp"].strftime("%Y-%m-%d %H:%M:%S")
-                data["game_duration"] = data["game_duration"].total_seconds()
-                summoner_match_data.append(data)
-
-            print(
-                f"# [INFO] update summoner: {summoner_data['summoner_id']} with {len(summoner_match_data)} match data"
-            )
-            mongodb.update(
-                collection,
-                {"_id": summoner_data["summoner_id"]},
-                {
-                    "match": summoner_match_data,
-                },
-            )
-
-        # --- close mongodb connection ---
-        client.close()
-
-        return ResponseDataCollect(
-            queue=message.queue,
-            tier=message.tier,
-            division=message.division,
-            output_dir=message.output_dir,
-        )
-
-    def call_duckdb(
-        self,
-        message: RequestDataCollect,
-        *,
-        upstream_events: List[ResponseMessage] = [],
-    ) -> ResponseDataCollect:
-        """_warning_
-
-        DuckDB는 FOREGIN KEY를 선언만 가능하고 실제로 동작하지는 않습니다.
-        따라서, ON DELETE CASCADE 같은 옵션은 명시적으로 금지되어 있으며 무결성 처리가 필요하다면 직접 코드에서 처리해야 합니다.
-
-        """
-
-        # --- get duckdb connection ---
-        conn = duckdb.get_connection("outputs/duckdb.db")
-
-        # --- init database ---
-        for table in self.config["query"]["dwh"]["create"]["table"]:
-            tables = duckdb.ls_table(conn)
-            if table not in tables:
-                print(f"# [INFO] create table: {table}")
-                duckdb.excute_query(conn, self.config["query"]["dwh"]["create"]["table"][table])
-
-        # --- init metabase ---
-        # try:
-        #     duckdb.excute_query(conn, self.config["query"]["dwh"]["create"]["db"]["metabase"])
-        # except psycopg2.errors.DuplicateDatabase:
-        #     print(f"[INFO] Metabase DB가 존재합니다.")
-
-        # --- insert data ---
-        league_data = self.get_league_data(message.queue, message.tier, message.division)
-        for summoner_league in league_data:
-            # table: summoner
-            summoner_data = self.get_summoner_data(summoner_league)
-
-            # table: summoner_league
-            summoner_league_data = self.get_summoner_league_data(summoner_league)
-
-            # insert: summoner
-            print(f"# [INFO] insert summoner: {summoner_data['summoner_id']}")
-            query = duckdb.create_insert_query(
-                table_name="summoner",
-                columns=summoner_data.keys(),
-            )
-            duckdb.excute_query(conn, query, params=list(summoner_data.values()))
-
-            # insert: summoner_league
-            print(
-                f"# [INFO] insert summoner_league: {(summoner_league_data['league_id'], summoner_league_data['summoner_id'])}"
-            )
-            query = duckdb.create_insert_query(
-                table_name="summoner_league",
-                columns=summoner_league_data.keys(),
-            )
-            duckdb.excute_query(
-                conn,
-                query,
-                params=list(summoner_league_data.values()),
-            )
-
-            summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
-            for summoner_matchid in summoner_matchids:
-                summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_data)
-
-                # insert: summoner_match
-                print(
-                    f"# [INFO] insert summoner_match: {(summoner_match_data['match_id'], summoner_match_data['summoner_id'])}"
-                )
-                query = duckdb.create_insert_query(
-                    table_name="summoner_match",
-                    columns=summoner_match_data.keys(),
-                )
-                duckdb.excute_query(
-                    conn,
-                    query,
-                    params=list(summoner_match_data.values()),
-                )
-
-            # --- save recent data ---
-            output_dir = os.path.join(message.output_dir, "recent-1-summoner")
-            os.makedirs(output_dir, exist_ok=True)
-
-            for table_name in self.config["query"]["dwh"]["create"]["table"]:
-                query = f"SELECT * FROM {table_name} WHERE summoner_id = ?"
-                if self.config["setting"]["save_format"] == "csv":
-                    duckdb.excute_query(
-                        conn,
-                        f"""
-                        COPY ({query}) TO '{output_dir}/{table_name}.csv' (DELIMITER ',', HEADER TRUE);
-                        """,
-                        params=[summoner_data["summoner_id"]],
-                    )
-                if self.config["setting"]["save_format"] == "parquet":
-                    duckdb.excute_query(
-                        conn,
-                        f"""
-                        COPY ({query}) TO '{output_dir}/{table_name}.parquet' (FORMAT PARQUET);
-                        """,
-                        params=[summoner_data["summoner_id"]],
-                    )
-
-        # --- close duckdb connection ---
-        conn.close()
-
-        return ResponseDataCollect(
-            queue=message.queue,
-            tier=message.tier,
-            division=message.division,
-            output_dir=message.output_dir,
-        )
-
-    def call_bigquery(
-        self,
-        message: RequestDataCollect,
-        *,
-        upstream_events: List[ResponseMessage] = [],
-    ) -> ResponseDataCollect:
-        """_warning_
-
-        BigQuery는 외부키, 기본키 등의 여러 제약조건을 지원하지 않습니다.
-        따라서 해당 조건들은 명시적으로 제거하거나 수정해주어야합니다.
-        - FOREIGN KEY -> 제거
-        - PRIMARY KEY -> 제거
-        - VARCHAR -> STRING
-        - FLOAT -> FLOAT64
-
-        """
-
-        # --- get duckdb connection ---
-        collection = bigquery.get_client(r"D:\study-bigquery-458607-b0791a99fb28.json")
-        project_name = collection.project
-        dataset_name = "lol"
-        bigquery.create_dataset(collection, dataset_name)
-
-        # --- init database ---
-        for table in self.config["query"]["dwh"]["create"]["table"]:
-            print(f"# [INFO] init table: {table}")
-            query = (
-                self.config["query"]["dwh"]["create"]["table"][table]
-                .replace("CREATE TABLE IF NOT EXISTS ", f"CREATE TABLE IF NOT EXISTS {project_name}.{dataset_name}.")
-                .replace("VARCHAR", "STRING")
-                .replace("FLOAT", "FLOAT64")
-            )
-            bigquery.excute_query(collection, query)
-
-        # --- insert data ---
-        def format_value(val):
-            if isinstance(val, str):
-                return f"STRING"
-            elif isinstance(val, bool):
-                return "TRUE" if val else "FALSE"
-            elif val is None:
-                return "NULL"
-            else:
-                return str(val)
-
-        league_data = self.get_league_data(message.queue, message.tier, message.division)
-        for summoner_league in league_data:
-            # table: summoner
-            summoner_data = self.get_summoner_data(summoner_league)
-
-            # table: summoner_league
-            summoner_league_data = self.get_summoner_league_data(summoner_league)
-
-            # insert: summoner
-            print(f"# [INFO] insert summoner: {summoner_data['summoner_id']}")
-            query = bigquery.create_insert_query(
-                table_name="summoner",
-                columns=summoner_data.keys(),
-                primary_keys=["summoner_id"],
-            )
-            job_config = bigquery.create_job_config(
-                data=[(col, format_value(summoner_data[col]), summoner_data[col]) for col in summoner_data.keys()]
-            )
-            bigquery.excute_query(collection, query, job_config=job_config)
-
-            # insert: summoner_league
-            print(
-                f"# [INFO] insert summoner_league: {(summoner_league_data['league_id'], summoner_league_data['summoner_id'])}"
-            )
-            query = bigquery.create_insert_query(
-                table_name="summoner_league",
-                columns=summoner_league_data.keys(),
-                primary_keys=["summoner_id"],
-            )
-            job_config = bigquery.create_job_config(
-                data=[
-                    (col, format_value(summoner_league_data[col]), summoner_league_data[col])
-                    for col in summoner_league_data.keys()
-                ]
-            )
-            bigquery.excute_query(collection, query, job_config=job_config)
-
-            summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
-            for summoner_matchid in summoner_matchids:
-                summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_data)
-
-                # insert: summoner_match
-                print(
-                    f"# [INFO] insert summoner_match: {(summoner_match_data['match_id'], summoner_match_data['summoner_id'])}"
-                )
-                query = bigquery.create_insert_query(
-                    table_name="summoner_match",
-                    columns=summoner_match_data.keys(),
-                    primary_keys=["summoner_id", "match_id"],
-                )
-                job_config = bigquery.create_job_config(
-                    data=[
-                        (col, format_value(summoner_match_data[col]), summoner_match_data[col])
-                        for col in summoner_match_data.keys()
-                    ]
-                )
-                bigquery.excute_query(collection, query, job_config=job_config)
-
-        # --- close bigquery connection ---
-        collection.close()
-
-        return ResponseDataCollect(
-            queue=message.queue,
-            tier=message.tier,
-            division=message.division,
-            output_dir=message.output_dir,
-        )
-
-    def call_postgres(
-        self,
-        message: RequestDataCollect,
-        *,
-        upstream_events: List[ResponseMessage] = [],
-    ) -> ResponseDataCollect:
-        # --- get postgresql connection ---
-        conn = postgres.get_connection()  # NOTE: with 문법을 사용할 경우 의도와 달리 트랜잭션으로 간주될 수 있음
-
-        # --- init database ---
-        for table in self.config["query"]["db"]["create"]["table"]:
-            tables = postgres.ls_table(conn)
-            if table not in tables:
-                print(f"# [INFO] create table: {table}")
-                postgres.excute_query(conn, self.config["query"]["db"]["create"]["table"][table])
-
-        # --- init metabase ---
-        try:
-            postgres.excute_query(conn, self.config["query"]["db"]["create"]["db"]["metabase"])
-        except psycopg2.errors.DuplicateDatabase:
-            print(f"[INFO] Metabase DB가 존재합니다.")
-
-        # --- insert data ---
-        league_data = self.get_league_data(message.queue, message.tier, message.division)
-        for summoner_league in league_data:
-            # table: summoner
-            summoner_data = self.get_summoner_data(summoner_league)
-
-            # table: summoner_league
-            summoner_league_data = self.get_summoner_league_data(summoner_league)
-
-            # insert: summoner
-            print(f"# [INFO] insert summoner: {summoner_data['summoner_id']}")
-            query = postgres.create_insert_query(
-                table_name="summoner",
-                columns=summoner_data.keys(),
-                primary_keys=["summoner_id"],
-            )
-            postgres.excute_query(conn, query, params=list(summoner_data.values()))
-
-            # insert: summoner_league
-            print(
-                f"# [INFO] insert summoner_league: {(summoner_league_data['league_id'], summoner_league_data['summoner_id'])}"
-            )
-            query = postgres.create_insert_query(
-                table_name="summoner_league",
-                columns=summoner_league_data.keys(),
-                primary_keys=["league_id", "summoner_id"],
-            )
-            postgres.excute_query(
-                conn,
-                query,
-                params=list(summoner_league_data.values()),
-            )
-
-            # TODO: 여기 로직이 조금 비효율적일 수 있음. 확인 필요
-            summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
-            for summoner_matchid in summoner_matchids:
-                summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_data)
-
-                # insert: summoner_match
-                print(
-                    f"# [INFO] insert summoner_match: {(summoner_match_data['match_id'], summoner_match_data['summoner_id'])}"
-                )
-                query = postgres.create_insert_query(
-                    table_name="summoner_match",
-                    columns=summoner_match_data.keys(),
-                    primary_keys=["match_id", "summoner_id"],
-                )
-                postgres.excute_query(
-                    conn,
-                    query,
-                    params=list(summoner_match_data.values()),
-                )
-
-        # --- close postgresql connection ---
-        conn.close()
-
-        return ResponseDataCollect(
-            queue=message.queue,
-            tier=message.tier,
-            division=message.division,
-            output_dir=message.output_dir,
-        )

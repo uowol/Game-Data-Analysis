@@ -169,3 +169,11 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Metabase
+# metabase/
+
+# DuckDB
+*.db
+*.csv
+outputs/

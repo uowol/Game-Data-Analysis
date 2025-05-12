@@ -1,5 +1,9 @@
 # DuckDB 관련 기능 함수
 import duckdb
+import subprocess
+import os
+from pathlib import Path
+from urllib.request import urlretrieve
 
 
 # Base Functions
@@ -28,6 +32,40 @@ def ls_table(conn, verbose=False):
     if verbose:
         print(tables)
     return tables
+
+
+def docker_build_metabase():
+    # docker build metabase/. --tag metaduck:latest
+    subprocess.run(
+        ["docker", "build", "../../metabase/.", "--tag", "metaduck:latest"],
+        check=True
+    )
+        
+
+def docker_run_metabase(container_name="metabase-duck", port=3000):
+    base_dir = Path(__file__).parent / "metabase"
+        
+    def run(cmd):
+        print(f"$ {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+    
+    result = subprocess.run(
+        ["docker", "ps", "-a", "-q", "-f", f"name={container_name}"],
+        capture_output=True,
+        text=True
+    )
+    if result.stdout.strip():
+        # run(["docker", "rm", "-f", container_name])
+        print(f"[INFO] Container {container_name} already exists. Starting it.")
+    else:
+        print(f"[INFO] Starting new container {container_name}.")
+        run([
+            "docker", "run", "-d", "--name", container_name,
+            "-p", f"{port}:3000",
+            "-e", "MB_PLUGINS_DIR=/home/plugins",
+            "-v", f"{base_dir}/data:/home/data",
+            f"metaduck:latest"
+        ])
 
 
 def create_insert_query(table_name, columns):
