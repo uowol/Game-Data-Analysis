@@ -1,5 +1,98 @@
 data_collect:
   queue: RANKED_SOLO_5x5
-  tier: DIAMOND
-  division: I
   output_dir: outputs/
+  sample_size: 10000
+  recipe:
+    - tier: CHALLENGER
+      division: Null
+      ratio: 0.0001
+    - tier: GRANDMASTER
+      division: Null
+      ratio: 0.0003
+    - tier: MASTER
+      division: Null
+      ratio: 0.0058
+    - tier: DIAMOND
+      division: I
+      ratio: 0.0044
+    - tier: DIAMOND
+      division: II
+      ratio: 0.0051
+    - tier: DIAMOND
+      division: III
+      ratio: 0.0048
+    - tier: DIAMOND
+      division: IV
+      ratio: 0.0127
+    - tier: EMERALD
+      division: I
+      ratio: 0.0167
+    - tier: EMERALD
+      division: II
+      ratio: 0.0138
+    - tier: EMERALD
+      division: III
+      ratio: 0.0204
+    - tier: EMERALD
+      division: IV
+      ratio: 0.0410
+    - tier: PLATINUM
+      division: I
+      ratio: 0.0167
+    - tier: PLATINUM
+      division: II
+      ratio: 0.0256
+    - tier: PLATINUM
+      division: III
+      ratio: 0.0320
+    - tier: PLATINUM
+      division: IV
+      ratio: 0.0545
+    - tier: GOLD
+      division: I
+      ratio: 0.0242
+    - tier: GOLD
+      division: II
+      ratio: 0.0391
+    - tier: GOLD
+      division: III
+      ratio: 0.0482
+    - tier: GOLD
+      division: IV
+      ratio: 0.0774
+    - tier: SILVER
+      division: I
+      ratio: 0.0332
+    - tier: SILVER
+      division: II
+      ratio: 0.0467
+    - tier: SILVER
+      division: III
+      ratio: 0.0512
+    - tier: SILVER
+      division: IV
+      ratio: 0.0652
+    - tier: BRONZE
+      division: I
+      ratio: 0.0339
+    - tier: BRONZE
+      division: II
+      ratio: 0.0460
+    - tier: BRONZE
+      division: III
+      ratio: 0.0485
+    - tier: BRONZE
+      division: IV
+      ratio: 0.0589
+    - tier: IRON
+      division: I
+      ratio: 0.0311
+    - tier: IRON
+      division: II
+      ratio: 0.0439
+    - tier: IRON
+      division: III
+      ratio: 0.0499
+    - tier: IRON
+      division: IV
+      ratio: 0.0489

@@ -54,10 +54,23 @@ def get_matchtimeline_by_matchid(matchid: str):
     return get(url)
 
 
-def get_league_by_queue_tier_division(queue: str, tier: str, division: str):
-    url = f"https://kr.api.riotgames.com/lol/league/v4/entries/{queue}/{tier}/{division}?page={1}&api_key=" + os.getenv(
-        "RIOT_KEY"
-    )
+def get_league_by_queue_tier_division(queue: str, tier: str, division: str, page:int=1):
+    if tier == "CHALLENGER":
+        url = f"https://kr.api.riotgames.com/lol/league/v4/challengerleagues/by-queue/{queue}?api_key=" + os.getenv(
+            "RIOT_KEY"
+        )
+    elif tier == "GRANDMASTER":
+        url = f"https://kr.api.riotgames.com/lol/league/v4/grandmasterleagues/by-queue/{queue}?api_key=" + os.getenv(
+            "RIOT_KEY"
+        )
+    elif tier == "MASTER":
+        url = f"https://kr.api.riotgames.com/lol/league/v4/masterleagues/by-queue/{queue}?api_key=" + os.getenv(
+            "RIOT_KEY"
+        )
+    else:
+        url = f"https://kr.api.riotgames.com/lol/league/v4/entries/{queue}/{tier}/{division}?page={page}&api_key=" + os.getenv(
+            "RIOT_KEY"
+        )
     return get(url)
 
 

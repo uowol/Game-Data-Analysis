@@ -23,88 +23,83 @@ class Component(base.Component):
                 self.config = self.config if self.config is not None else {}
 
     def call(self, message: RequestDataCollect, *args, **kwargs) -> ResponseDataCollect:
+        # --- download queue metadata ---
+        global queue_metadata
+        queue_metadata_url = "https://static.developer.riotgames.com/docs/lol/queues.json"
+        queue_metadata_data = riot_api.get(queue_metadata_url)
+        queue_metadata_data += [
+            {"queueId": 480, "map": "Summoner's Rift", "description": "Normal (Quickplay)", "notes": None},
+        ]
+        queue_metadata = pd.DataFrame(queue_metadata_data, columns=["queueId", "map", "description", "notes"])
+
         # --- get duckdb connection ---
         os.makedirs("../../metabase/data", exist_ok=True)
         conn = duckdb.get_connection("../../metabase/data/duckdb.db")
 
         # --- init database ---
-        for table in self.config["query"]["dwh"]["create"]["table"]:
+        for table in self.config["query"]["create"]["table"]:
             tables = duckdb.ls_table(conn)
             if table not in tables:
                 print(f"# [INFO] create table: {table}")
-                duckdb.excute_query(conn, self.config["query"]["dwh"]["create"]["table"][table])
-        
-        # --- insert data ---
-        league_data = self.get_league_data(message.queue, message.tier, message.division)
-        for summoner_league in league_data:
-            # table: summoner
-            summoner_data = self.get_summoner_data(summoner_league)
+                duckdb.excute_query(conn, self.config["query"]["create"]["table"][table])
 
-            # table: summoner_league
-            summoner_league_data = self.get_summoner_league_data(summoner_league)
+        # --- sampling summoners ---
+        for recipe in message.recipe:
+            sample_size = int(message.sample_size * recipe.ratio)
+            if sample_size < 30:
+                sample_size = 30
+            weight = recipe.ratio / message.sample_size
+            print(f"# [INFO] sampling summoners: {recipe.tier} {recipe.division if recipe.division else ""} {sample_size} ({weight})")    
 
-            # insert: summoner
-            print(f"# [INFO] insert summoner: {summoner_data['summoner_id']}")
-            query = duckdb.create_insert_query(
-                table_name="summoner",
-                columns=summoner_data.keys(),
+            page = 1
+            league_data = self.get_league_data(
+                queue=message.queue,
+                tier=recipe.tier,
+                division=recipe.division,
+                page=page,
             )
-            duckdb.excute_query(conn, query, params=list(summoner_data.values()))
-
-            # insert: summoner_league
-            print(
-                f"# [INFO] insert summoner_league: {(summoner_league_data['league_id'], summoner_league_data['summoner_id'])}"
-            )
-            query = duckdb.create_insert_query(
-                table_name="summoner_league",
-                columns=summoner_league_data.keys(),
-            )
-            duckdb.excute_query(
-                conn,
-                query,
-                params=list(summoner_league_data.values()),
-            )
-
-            summoner_matchids = self.get_summoner_matchids(summoner_data["puuid"])
-            for summoner_matchid in summoner_matchids:
-                summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_data)
-
-                # insert: summoner_match
-                print(
-                    f"# [INFO] insert summoner_match: {(summoner_match_data['match_id'], summoner_match_data['summoner_id'])}"
+            while len(league_data) < sample_size:
+                page += 1
+                league_data += self.get_league_data(
+                    queue=message.queue,
+                    tier=recipe.tier,
+                    division=recipe.division,
+                    page=page,
                 )
-                query = duckdb.create_insert_query(
-                    table_name="summoner_match",
-                    columns=summoner_match_data.keys(),
-                )
-                duckdb.excute_query(
-                    conn,
-                    query,
-                    params=list(summoner_match_data.values()),
-                )
-
-            # --- save recent data ---
-            output_dir = os.path.join(message.output_dir, "recent-1-summoner")
-            os.makedirs(output_dir, exist_ok=True)
-
-            for table_name in self.config["query"]["dwh"]["create"]["table"]:
-                query = f"SELECT * FROM {table_name} WHERE summoner_id = ?"
-                if self.config["setting"]["save_format"] == "csv":
+            # TODO: random sampling
+            league_data = league_data[:sample_size]
+                            
+            # TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리
+            insert_sampled_summoners = duckdb.create_insert_query(
+                table_name="sampled_summoners",
+                columns=["summoner_id", "tier", "rank"],
+            )
+            insert_raw_summoner_game_logs = None
+            
+            for summoner_league in league_data:
+                summoner_matchids = self.get_summoner_matchids_30d(summoner_league['puuid'])
+                is_available = True
+                for summoner_matchid in summoner_matchids:
+                    summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_league)
+                    print(summoner_match_data['game_start_timestamp'])
+                    if summoner_match_data is None:
+                        is_available = False
+                        break
+                    if insert_raw_summoner_game_logs is None:
+                        insert_raw_summoner_game_logs = duckdb.create_insert_query(
+                            table_name="raw_summoner_game_logs",
+                            columns=list(summoner_match_data.keys()) + ["tier", "rank"],
+                        )
                     duckdb.excute_query(
                         conn,
-                        f"""
-                        COPY ({query}) TO '{output_dir}/{table_name}.csv' (DELIMITER ',', HEADER TRUE);
-                        """,
-                        params=[summoner_data["summoner_id"]],
+                        insert_raw_summoner_game_logs,
+                        params=list(summoner_match_data.values()) + [recipe.tier, recipe.division],
                     )
-                if self.config["setting"]["save_format"] == "parquet":
-                    duckdb.excute_query(
-                        conn,
-                        f"""
-                        COPY ({query}) TO '{output_dir}/{table_name}.parquet' (FORMAT PARQUET);
-                        """,
-                        params=[summoner_data["summoner_id"]],
-                    )
+                    
+                if is_available:
+                    duckdb.excute_query(conn, insert_sampled_summoners, params=[summoner_league['summonerId'], recipe.tier, recipe.division])
+
+                print(f"# [INFO] insert sampled summoner: {summoner_league['summonerId']} ({len(summoner_matchids)})")
 
         # --- close duckdb connection ---
         conn.close()
@@ -121,8 +116,11 @@ class Component(base.Component):
             output_dir=message.output_dir,
         )
 
-    def get_league_data(self, queue: str, tier: str, division: str):
-        return riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division)
+    def get_league_data(self, queue: str, tier: str, division: str, page: int = 1):
+        res = riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division, page=page)
+        if not division:
+            return res['entries']
+        return res
 
     def get_summoner_league_data(self, summoner_league: dict):
         return {
@@ -147,102 +145,116 @@ class Component(base.Component):
             "game_tag": account["tagLine"],
         }
 
-    def get_summoner_matchids(self, puuid: str):
-        return riot_api.get_matchids_by_puuid(puuid=puuid)
+    def get_summoner_matchids_30d(self, puuid: str):
+        res = riot_api.get_matchids_by_puuid(
+            puuid=puuid, 
+            startTime=int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) 
+                - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), 
+            count=100
+        )
+        while x:= riot_api.get_matchids_by_puuid(
+            puuid=puuid, 
+            startTime=int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) 
+                - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), 
+            start=len(res),
+            count=100
+        ):
+            res += x
+        return res
 
-    def get_summoner_match_data(self, matchid: str, summoner_data: dict):
-        # download metadata
-        queue_metadata_url = "https://static.developer.riotgames.com/docs/lol/queues.json"
-        queue_metadata_data = riot_api.get(queue_metadata_url)
-        queue_metadata = pd.DataFrame(queue_metadata_data, columns=["queueId", "map", "description", "notes"])
-        
+    def get_summoner_match_data(self, matchid: str, summoner_league: dict):
         summoner_match = riot_api.get_match_by_matchid(matchid=matchid)
-        match_id = summoner_match["metadata"]["matchId"]
-        # NOTE: 여기서 match_id가 이미 적재되어 있다면 패스하는 로직이 필요
 
-        # NOTE: 임시, 현재 summoner_id의 summoner_index를 찾아 사용
+        # find summoner index
         summoner_index = -1
         for i, x in enumerate(
             summoner_match["metadata"]["participants"]
         ):
-            if x == summoner_data["puuid"]:
+            if x == summoner_league["puuid"]:
                 summoner_index = i
                 break
-        assert summoner_index != -1, f"Summoner ID {summoner_data['summoner_id']} not found in match {match_id}"
-
-        return {
-            "match_id": match_id,
-            "summoner_id": summoner_data["summoner_id"],
-            "team_id": summoner_match["info"]["participants"][summoner_index]["teamId"],
-            "end_of_game_result": summoner_match["info"]["endOfGameResult"] == "GameComplete",
-            "game_start_timestamp": datetime(1970, 1, 1, 0, 0, 0)
-            + timedelta(milliseconds=summoner_match["info"]["gameStartTimestamp"]),
-            "game_end_timestamp": datetime(1970, 1, 1, 0, 0, 0)
-            + timedelta(milliseconds=summoner_match["info"]["gameEndTimestamp"]),
-            "game_duration": timedelta(seconds=summoner_match["info"]["gameDuration"]),
-            "queue_id": summoner_match["info"]["queueId"],
-            "queue_description": queue_metadata.loc[
-                queue_metadata["queueId"] == summoner_match["info"]["queueId"], "description"
-            ].values[0],
-            "champion_id": summoner_match["info"]["participants"][summoner_index]["championId"],
-            "champion_name": summoner_match["info"]["participants"][summoner_index]["championName"],
-            "individual_position": summoner_match["info"]["participants"][summoner_index]["individualPosition"],
-            "team_position": summoner_match["info"]["participants"][summoner_index]["teamPosition"],
-            "summoner_spell1_id": summoner_match["info"]["participants"][summoner_index]["summoner1Id"],
-            "summoner_spell2_id": summoner_match["info"]["participants"][summoner_index]["summoner2Id"],
-            "summoner_spell1_casts": summoner_match["info"]["participants"][summoner_index]["summoner1Casts"],
-            "summoner_spell2_casts": summoner_match["info"]["participants"][summoner_index]["summoner2Casts"],
-            "kills": summoner_match["info"]["participants"][summoner_index]["kills"],
-            "deaths": summoner_match["info"]["participants"][summoner_index]["deaths"],
-            "assists": summoner_match["info"]["participants"][summoner_index]["assists"],
-            "longest_time_living": summoner_match["info"]["participants"][summoner_index]["longestTimeSpentLiving"],
-            "magic_damage_to_champion": summoner_match["info"]["participants"][summoner_index][
-                "magicDamageDealtToChampions"
-            ],
-            "physical_damage_to_champion": summoner_match["info"]["participants"][summoner_index][
-                "physicalDamageDealtToChampions"
-            ],
-            "vision_score": summoner_match["info"]["participants"][summoner_index]["visionScore"],
-            "wards_placed": summoner_match["info"]["participants"][summoner_index]["wardsPlaced"],
-            "wards_killed": summoner_match["info"]["participants"][summoner_index]["wardsKilled"],
-            "baron_kills": summoner_match["info"]["participants"][summoner_index]["baronKills"],
-            "dragon_kills": summoner_match["info"]["participants"][summoner_index]["dragonKills"],
-            "voidmonster_kills": summoner_match["info"]["participants"][summoner_index]["challenges"][
-                "voidMonsterKill"
-            ],
-            "gold_earned": summoner_match["info"]["participants"][summoner_index]["goldEarned"],
-            "item0_id": summoner_match["info"]["participants"][summoner_index]["item0"],
-            "item1_id": summoner_match["info"]["participants"][summoner_index]["item1"],
-            "item2_id": summoner_match["info"]["participants"][summoner_index]["item2"],
-            "item3_id": summoner_match["info"]["participants"][summoner_index]["item3"],
-            "item4_id": summoner_match["info"]["participants"][summoner_index]["item4"],
-            "item5_id": summoner_match["info"]["participants"][summoner_index]["item5"],
-            "item6_id": summoner_match["info"]["participants"][summoner_index]["item6"],
-            "minion_cs": summoner_match["info"]["participants"][summoner_index]["totalMinionsKilled"],
-            "jungle_cs": summoner_match["info"]["participants"][summoner_index]["neutralMinionsKilled"],
-            "game_ended_early_surrender": summoner_match["info"]["participants"][summoner_index][
-                "gameEndedInEarlySurrender"
-            ],
-            "game_ended_surrender": summoner_match["info"]["participants"][summoner_index]["gameEndedInSurrender"],
-            "kda": summoner_match["info"]["participants"][summoner_index]["challenges"]["kda"],
-            "total_ping_count": sum(
-                [v for k, v in summoner_match["info"]["participants"][summoner_index].items() if "Pings" in k]
-            ),
-            "primary_perk_style": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["style"],
-            "primary_perk1": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
-                0
-            ]["perk"],
-            "primary_perk2": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
-                1
-            ]["perk"],
-            "primary_perk3": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
-                2
-            ]["perk"],
-            "sub_perk_style": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["style"],
-            "sub_perk1": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["selections"][0][
-                "perk"
-            ],
-            "sub_perk2": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["selections"][1][
-                "perk"
-            ],
-        }
+        assert summoner_index != -1, f"Summoner ID {summoner_league['summonerId']} not found in match {matchid}"
+        
+        try:
+            res = {
+                "match_id": matchid,
+                "summoner_id": summoner_league["summonerId"],
+                "team_id": summoner_match["info"]["participants"][summoner_index]["teamId"],
+                "end_of_game_result": summoner_match["info"]["endOfGameResult"] == "GameComplete",
+                "game_start_timestamp": datetime(1970, 1, 1, 0, 0, 0)
+                + timedelta(milliseconds=summoner_match["info"]["gameStartTimestamp"]),
+                "game_end_timestamp": datetime(1970, 1, 1, 0, 0, 0)
+                + timedelta(milliseconds=summoner_match["info"]["gameEndTimestamp"]),
+                "game_duration": timedelta(seconds=summoner_match["info"]["gameDuration"]),
+                "game_mode": summoner_match["info"]["gameMode"],
+                "queue_id": summoner_match["info"]["queueId"],
+                "queue_description": queue_metadata.loc[
+                    queue_metadata["queueId"] == summoner_match["info"]["queueId"], "description"
+                ].values[0],
+                "champion_id": summoner_match["info"]["participants"][summoner_index]["championId"],
+                "champion_name": summoner_match["info"]["participants"][summoner_index]["championName"],
+                "individual_position": summoner_match["info"]["participants"][summoner_index]["individualPosition"],
+                "team_position": summoner_match["info"]["participants"][summoner_index]["teamPosition"],
+                "summoner_spell1_id": summoner_match["info"]["participants"][summoner_index]["summoner1Id"],
+                "summoner_spell2_id": summoner_match["info"]["participants"][summoner_index]["summoner2Id"],
+                "summoner_spell1_casts": summoner_match["info"]["participants"][summoner_index]["summoner1Casts"],
+                "summoner_spell2_casts": summoner_match["info"]["participants"][summoner_index]["summoner2Casts"],
+                "kills": summoner_match["info"]["participants"][summoner_index]["kills"],
+                "deaths": summoner_match["info"]["participants"][summoner_index]["deaths"],
+                "assists": summoner_match["info"]["participants"][summoner_index]["assists"],
+                "longest_time_living": summoner_match["info"]["participants"][summoner_index]["longestTimeSpentLiving"],
+                "magic_damage_to_champion": summoner_match["info"]["participants"][summoner_index][
+                    "magicDamageDealtToChampions"
+                ],
+                "physical_damage_to_champion": summoner_match["info"]["participants"][summoner_index][
+                    "physicalDamageDealtToChampions"
+                ],
+                "vision_score": summoner_match["info"]["participants"][summoner_index]["visionScore"],
+                "wards_placed": summoner_match["info"]["participants"][summoner_index]["wardsPlaced"],
+                "wards_killed": summoner_match["info"]["participants"][summoner_index]["wardsKilled"],
+                "baron_kills": summoner_match["info"]["participants"][summoner_index]["baronKills"],
+                "dragon_kills": summoner_match["info"]["participants"][summoner_index]["dragonKills"],
+                "voidmonster_kills": summoner_match["info"]["participants"][summoner_index]["challenges"][
+                    "voidMonsterKill"
+                ],
+                "gold_earned": summoner_match["info"]["participants"][summoner_index]["goldEarned"],
+                "item0_id": summoner_match["info"]["participants"][summoner_index]["item0"],
+                "item1_id": summoner_match["info"]["participants"][summoner_index]["item1"],
+                "item2_id": summoner_match["info"]["participants"][summoner_index]["item2"],
+                "item3_id": summoner_match["info"]["participants"][summoner_index]["item3"],
+                "item4_id": summoner_match["info"]["participants"][summoner_index]["item4"],
+                "item5_id": summoner_match["info"]["participants"][summoner_index]["item5"],
+                "item6_id": summoner_match["info"]["participants"][summoner_index]["item6"],
+                "minion_cs": summoner_match["info"]["participants"][summoner_index]["totalMinionsKilled"],
+                "jungle_cs": summoner_match["info"]["participants"][summoner_index]["neutralMinionsKilled"],
+                "game_ended_early_surrender": summoner_match["info"]["participants"][summoner_index][
+                    "gameEndedInEarlySurrender"
+                ],
+                "game_ended_surrender": summoner_match["info"]["participants"][summoner_index]["gameEndedInSurrender"],
+                "kda": summoner_match["info"]["participants"][summoner_index]["challenges"]["kda"],
+                "total_ping_count": sum(
+                    [v for k, v in summoner_match["info"]["participants"][summoner_index].items() if "Pings" in k]
+                ),
+                "primary_perk_style": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["style"],
+                "primary_perk1": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
+                    0
+                ]["perk"],
+                "primary_perk2": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
+                    1
+                ]["perk"],
+                "primary_perk3": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
+                    2
+                ]["perk"],
+                "sub_perk_style": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["style"],
+                "sub_perk1": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["selections"][0][
+                    "perk"
+                ],
+                "sub_perk2": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["selections"][1][
+                    "perk"
+                ],
+            }
+        except Exception as e:
+            print(f"# [ERROR] {e}")
+            print(summoner_match)
+            return None
+        return res
