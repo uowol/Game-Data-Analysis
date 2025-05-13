@@ -1,5 +1,6 @@
 import os
 import yaml
+import pandas as pd
 from typing import List
 from datetime import datetime, timedelta
 from components import base
@@ -150,6 +151,11 @@ class Component(base.Component):
         return riot_api.get_matchids_by_puuid(puuid=puuid)
 
     def get_summoner_match_data(self, matchid: str, summoner_data: dict):
+        # download metadata
+        queue_metadata_url = "https://static.developer.riotgames.com/docs/lol/queues.json"
+        queue_metadata_data = riot_api.get(queue_metadata_url)
+        queue_metadata = pd.DataFrame(queue_metadata_data, columns=["queueId", "map", "description", "notes"])
+        
         summoner_match = riot_api.get_match_by_matchid(matchid=matchid)
         match_id = summoner_match["metadata"]["matchId"]
         # NOTE: 여기서 match_id가 이미 적재되어 있다면 패스하는 로직이 필요
@@ -158,7 +164,7 @@ class Component(base.Component):
         summoner_index = -1
         for i, x in enumerate(
             summoner_match["metadata"]["participants"]
-        ):  # NOTE: 리그는 맞는데, 최근 게임으로 칼바람 등이 들어올 수 있음
+        ):
             if x == summoner_data["puuid"]:
                 summoner_index = i
                 break
@@ -174,6 +180,10 @@ class Component(base.Component):
             "game_end_timestamp": datetime(1970, 1, 1, 0, 0, 0)
             + timedelta(milliseconds=summoner_match["info"]["gameEndTimestamp"]),
             "game_duration": timedelta(seconds=summoner_match["info"]["gameDuration"]),
+            "queue_id": summoner_match["info"]["queueId"],
+            "queue_description": queue_metadata.loc[
+                queue_metadata["queueId"] == summoner_match["info"]["queueId"], "description"
+            ].values[0],
             "champion_id": summoner_match["info"]["participants"][summoner_index]["championId"],
             "champion_name": summoner_match["info"]["participants"][summoner_index]["championName"],
             "individual_position": summoner_match["info"]["participants"][summoner_index]["individualPosition"],
