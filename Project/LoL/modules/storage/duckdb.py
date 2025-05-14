@@ -43,7 +43,7 @@ def docker_build_metabase():
         
 
 def docker_run_metabase(container_name="metabase-duck", port=3000):
-    base_dir = Path(__file__).parent / "metabase"
+    base_dir = Path.cwd()
         
     def run(cmd):
         print(f"$ {' '.join(cmd)}")

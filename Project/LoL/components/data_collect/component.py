@@ -1,12 +1,12 @@
 import os
 import yaml
 import pandas as pd
+from pathlib import Path
 from typing import List
 from datetime import datetime, timedelta
 from components import base
 from modules.data_ingestion import riot_api
-from modules.storage import duckdb
-from components.formats import RequestDataCollect, ResponseDataCollect, ResponseMessage
+from components.formats import RequestDataCollect, ResponseDataCollect
 
 
 class ComponentType(base.ComponentType):
@@ -18,7 +18,7 @@ class Component(base.Component):
         if config:
             self.config = ComponentType(**config)
         else:
-            with open("components/data_collect/config.yaml", "r") as fp:
+            with open(os.path.join(Path(__file__).parent, "config.yaml"), "r") as fp:
                 self.config = yaml.safe_load(fp)
                 self.config = self.config if self.config is not None else {}
 
@@ -32,16 +32,8 @@ class Component(base.Component):
         ]
         queue_metadata = pd.DataFrame(queue_metadata_data, columns=["queueId", "map", "description", "notes"])
 
-        # --- get duckdb connection ---
-        os.makedirs("../../metabase/data", exist_ok=True)
-        conn = duckdb.get_connection("../../metabase/data/duckdb.db")
-
-        # --- init database ---
-        for table in self.config["query"]["create"]["table"]:
-            tables = duckdb.ls_table(conn)
-            if table not in tables:
-                print(f"# [INFO] create table: {table}")
-                duckdb.excute_query(conn, self.config["query"]["create"]["table"][table])
+        # --- make shards directory ---
+        os.makedirs(message.shards_dir, exist_ok=True)
 
         # --- sampling summoners ---
         for recipe in message.recipe:
@@ -68,52 +60,39 @@ class Component(base.Component):
                 )
             # TODO: random sampling
             league_data = league_data[:sample_size]
-                            
-            # TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리
-            insert_sampled_summoners = duckdb.create_insert_query(
-                table_name="sampled_summoners",
-                columns=["summoner_id", "tier", "rank"],
-            )
-            insert_raw_summoner_game_logs = None
             
+            # --- data collect ---
+            # TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리
             for summoner_league in league_data:
                 summoner_matchids = self.get_summoner_matchids_30d(summoner_league['puuid'])
-                is_available = True
+                records = []
+
+                # # NOTE: 임시 코드
+                # if os.path.exists(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet"):
+                #     df = pd.read_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet")
+                #     df['tier'] = recipe.tier
+                #     df['rank'] = recipe.division
+                #     df.to_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet", index=False)
+                #     print(f"# [INFO] insert sampled summoner: {summoner_league['summonerId']} ({len(df)})")
+                #     continue
+
                 for summoner_matchid in summoner_matchids:
                     summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_league)
-                    print(summoner_match_data['game_start_timestamp'])
-                    if summoner_match_data is None:
-                        is_available = False
-                        break
-                    if insert_raw_summoner_game_logs is None:
-                        insert_raw_summoner_game_logs = duckdb.create_insert_query(
-                            table_name="raw_summoner_game_logs",
-                            columns=list(summoner_match_data.keys()) + ["tier", "rank"],
-                        )
-                    duckdb.excute_query(
-                        conn,
-                        insert_raw_summoner_game_logs,
-                        params=list(summoner_match_data.values()) + [recipe.tier, recipe.division],
-                    )
-                    
-                if is_available:
-                    duckdb.excute_query(conn, insert_sampled_summoners, params=[summoner_league['summonerId'], recipe.tier, recipe.division])
+                    if summoner_match_data is None: break
+                    summoner_match_data['tier'] = recipe.tier
+                    summoner_match_data['rank'] = recipe.division
+                    records.append(summoner_match_data)
+                
+                # --- save to parquet ---
+                if len(records) == 0: continue
+                df = pd.DataFrame(records)
+                df.to_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet", index=False)
 
-                print(f"# [INFO] insert sampled summoner: {summoner_league['summonerId']} ({len(summoner_matchids)})")
-
-        # --- close duckdb connection ---
-        conn.close()
-        
-        # --- init metabase ---
-        # duckdb.docker_build_metabase()    # if need to build metabase image
-        # duckdb.docker_run_metabase()        # if it already started, it will be passed
-
+                print(f"# [INFO] insert sampled summoner: {summoner_league['summonerId']} ({len(records)})")
 
         return ResponseDataCollect(
-            queue=message.queue,
-            tier=message.tier,
-            division=message.division,
-            output_dir=message.output_dir,
+            **message.model_dump(),
+            result="success",
         )
 
     def get_league_data(self, queue: str, tier: str, division: str, page: int = 1):
@@ -185,7 +164,8 @@ class Component(base.Component):
                 + timedelta(milliseconds=summoner_match["info"]["gameStartTimestamp"]),
                 "game_end_timestamp": datetime(1970, 1, 1, 0, 0, 0)
                 + timedelta(milliseconds=summoner_match["info"]["gameEndTimestamp"]),
-                "game_duration": timedelta(seconds=summoner_match["info"]["gameDuration"]),
+                "game_duration": timedelta(milliseconds=summoner_match["info"]["gameDuration"]),
+                # NOTE: API 문서에 gameDuration는 seconds로 되어있지만, 실제로는 milliseconds로 되어있음
                 "game_mode": summoner_match["info"]["gameMode"],
                 "queue_id": summoner_match["info"]["queueId"],
                 "queue_description": queue_metadata.loc[

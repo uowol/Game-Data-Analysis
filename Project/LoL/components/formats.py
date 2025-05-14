@@ -15,12 +15,32 @@ class RecipeItem(BaseModel):
     division: Optional[str]
     ratio: float
 
+
 class RequestDataCollect(RequestMessage):
     queue: str
-    output_dir: str
+    shards_dir: str
     sample_size: int
     recipe: List[RecipeItem]
 
 
 class ResponseDataCollect(RequestDataCollect):
-    pass
+    result: str # "success" or "failed"
+
+
+class RequestDuckdbDataUpload(RequestMessage):
+    shards_dir: str
+    duckdb_filepath: str
+    
+
+class ResponseDuckdbDataUpload(RequestDuckdbDataUpload):
+    result: str # "success" or "failed"
+    
+    
+class RequestDataAnalyze(RequestMessage):
+    duckdb_filepath: str
+    report_filepath: str
+
+
+class ResponseDataAnalyze(RequestDataAnalyze):
+    result: str # "success" or "failed"
+    
