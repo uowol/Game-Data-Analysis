@@ -231,8 +231,8 @@ class Component(base.Component):
                 + timedelta(milliseconds=summoner_match["info"]["gameStartTimestamp"]),
                 "game_end_timestamp": datetime(1970, 1, 1, 0, 0, 0)
                 + timedelta(milliseconds=summoner_match["info"]["gameEndTimestamp"]),
-                "game_duration": timedelta(milliseconds=summoner_match["info"]["gameDuration"]),
-                # NOTE: API 문서에 gameDuration는 seconds로 되어있지만, 실제로는 milliseconds로 되어있음
+                "game_duration": timedelta(milliseconds=summoner_match["info"]["gameEndTimestamp"])
+                - timedelta(milliseconds=summoner_match["info"]["gameStartTimestamp"]),
                 "game_mode": summoner_match["info"]["gameMode"],
                 "queue_id": summoner_match["info"]["queueId"],
                 "queue_description": queue_metadata.loc[
