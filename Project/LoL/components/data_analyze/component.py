@@ -26,8 +26,8 @@ class Component(base.Component):
 
     def call(self, message: RequestDataAnalyze, *args, **kwargs) -> ResponseDataAnalyze:
         # --- load metadata(tier, weight) ---
-        weight_df = pd.read_csv(Path(message.duckdb_filepath).parent / "metadata.csv")
-        weight_df["key"] = list(zip(weight_df["tier"], weight_df["division"].fillna("")))
+        weight_df = pd.read_csv(Path(message.duckdb_filepath).parent / "metadata.csv", keep_default_na=False)
+        weight_df["key"] = list(zip(weight_df["tier"], weight_df["division"].fillna("None")))
         weight_map = dict(zip(weight_df["key"], weight_df["weight"]))
 
         # --- load raw_data as dataframe ---
@@ -37,7 +37,7 @@ class Component(base.Component):
             "SELECT * FROM raw_summoner_game_logs where game_start_timestamp >= DATE '2025-04-14';"
         ).fetchdf()
         df["timestamp"] = df["game_start_timestamp"].apply(lambda x: x.date())
-        df["division"] = df["rank"].fillna("")
+        df["division"] = df["rank"].fillna("None")
         df["w"] = list(df.apply(lambda r: weight_map.get((r["tier"], r["division"]), 1.0), axis=1))
         print(f"[INFO] Load {len(df)} records: {df.summoner_id.nunique()} summoners.")
 

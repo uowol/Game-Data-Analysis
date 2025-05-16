@@ -29,9 +29,11 @@ class Component(base.Component):
         # --- init database ---
         table = "raw_summoner_game_logs"
         tables = duckdb.ls_table(conn)
-        if table not in tables:
-            print(f"# [INFO] create table: {table}")
-            duckdb.excute_query(conn, self.config["query"]["create"]["table"][table])
+        if table in tables:
+            print(f"# [INFO] drop table: {table}")
+            conn.execute(f"DROP TABLE {table};")
+        print(f"# [INFO] create table: {table}")
+        duckdb.excute_query(conn, self.config["query"]["create"]["table"][table])
         duckdb.excute_query(conn, self.config["query"]["insert"][table].format(f"{message.shards_dir}/*.parquet"))
 
         return ResponseDuckdbDataUpload(

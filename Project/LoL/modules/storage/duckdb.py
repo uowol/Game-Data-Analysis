@@ -28,7 +28,7 @@ def excute_query(conn, query, params=None):
 # Custom Functions
 def ls_table(conn, verbose=False):
     query = "SELECT table_name FROM duckdb_tables();"
-    tables = excute_query(conn, query)
+    tables = [x[0] for x in excute_query(conn, query)]
     if verbose:
         print(tables)
     return tables
@@ -36,36 +36,40 @@ def ls_table(conn, verbose=False):
 
 def docker_build_metabase():
     # docker build metabase/. --tag metaduck:latest
-    subprocess.run(
-        ["docker", "build", "../../metabase/.", "--tag", "metaduck:latest"],
-        check=True
-    )
-        
+    subprocess.run(["docker", "build", "../../metabase/.", "--tag", "metaduck:latest"], check=True)
+
 
 def docker_run_metabase(container_name="metabase-duck", port=3000):
     base_dir = Path.cwd()
-        
+
     def run(cmd):
         print(f"$ {' '.join(cmd)}")
         subprocess.run(cmd, check=True)
-    
+
     result = subprocess.run(
-        ["docker", "ps", "-a", "-q", "-f", f"name={container_name}"],
-        capture_output=True,
-        text=True
+        ["docker", "ps", "-a", "-q", "-f", f"name={container_name}"], capture_output=True, text=True
     )
     if result.stdout.strip():
         # run(["docker", "rm", "-f", container_name])
         print(f"[INFO] Container {container_name} already exists. Starting it.")
     else:
         print(f"[INFO] Starting new container {container_name}.")
-        run([
-            "docker", "run", "-d", "--name", container_name,
-            "-p", f"{port}:3000",
-            "-e", "MB_PLUGINS_DIR=/home/plugins",
-            "-v", f"{base_dir}/data:/home/data",
-            f"metaduck:latest"
-        ])
+        run(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                container_name,
+                "-p",
+                f"{port}:3000",
+                "-e",
+                "MB_PLUGINS_DIR=/home/plugins",
+                "-v",
+                f"{base_dir}/data:/home/data",
+                f"metaduck:latest",
+            ]
+        )
 
 
 def create_insert_query(table_name, columns):

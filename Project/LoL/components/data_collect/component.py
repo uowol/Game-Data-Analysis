@@ -105,14 +105,14 @@ class Component(base.Component):
                 remove_list = loaded_data[
                     (loaded_data.tier == recipe.tier) & (loaded_data.division == recipe.division)
                 ].summoner_id.tolist()[:-sample_size]
-                print(f"[INFO] Will Remove {len(remove_list)} shards: {recipe.tier} {recipe.division}.")
+                print(f"\t[INFO] Will Remove {len(remove_list)} shards: {recipe.tier} {recipe.division}.")
 
                 # --- remove parquet file ---
                 for summoner_id in remove_list:
                     file_path = shards_dir / f"{summoner_id}.parquet"
                     if os.path.exists(file_path):
                         os.remove(file_path)
-                        print(f"[INFO] Remove {file_path}.")
+                        print(f"\t[INFO] Remove {file_path}.")
 
             # --- data collect --- TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리
             page = 0
