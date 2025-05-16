@@ -39,6 +39,11 @@ class Component(base.Component):
         df["timestamp"] = df["game_start_timestamp"].apply(lambda x: x.date())
         df["division"] = df["rank"].fillna("None")
         df["w"] = list(df.apply(lambda r: weight_map.get((r["tier"], r["division"]), 1.0), axis=1))
+
+        # --- Replace Corrupted Duration Data ---
+        # NOTE: game_duration 데이터가 오염되었음을 확인, df["game_end_timestamp"] - df["game_start_timestamp"]을 대신 사용해야.
+        df["game_duration"] = df["game_end_timestamp"] - df["game_start_timestamp"]
+
         print(f"[INFO] Load {len(df)} records: {df.summoner_id.nunique()} summoners.")
 
         conn.close()
