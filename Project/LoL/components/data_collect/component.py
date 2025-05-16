@@ -36,48 +36,85 @@ class Component(base.Component):
         queue_metadata = pd.DataFrame(queue_metadata_data, columns=["queueId", "map", "description", "notes"])
 
         # --- make shards directory ---
-        os.makedirs(message.shards_dir, exist_ok=True)
-            
+        shards_dir = Path(message.shards_dir) / message.date  # {shard_dir}/{date}
+        os.makedirs(shards_dir, exist_ok=True)
+
         # --- if resume is true, skip already collected data ---
-        skip_summoners = []
         if message.resume:
+            # --- get connection ---
             conn = duckdb.get_connection()
-            metadata = pd.read_csv(f"{Path(message.shards_dir).parent}/metadata.csv")
-            metadata = metadata.merge(
-                conn.execute(
-                    f"SELECT DISTINCT summoner_id, tier, rank AS division FROM '{message.shards_dir}/*.parquet'"
-                ).fetchdf().groupby(['tier', 'division']).summoner_id.nunique().reset_index(name='cnt'),
-                how='left', 
-                on=['tier', 'division']
-            )
+
+            # --- check loaded shards ---
+            metadata = pd.read_csv(shards_dir.parent.parent / "metadata.csv", keep_default_na=False)
+            loaded_data = conn.execute(
+                f"SELECT DISTINCT summoner_id, tier, COALESCE(rank, 'None') AS division FROM '{shards_dir.as_posix()}/*.parquet'"
+            ).fetchdf()
+            try:
+                metadata = metadata.merge(
+                    # NOTE: group by 함수는 null 값이 포함되면 해당 행을 삭제하므로 COALESCE를 사용하여 null 값을 'None'으로 대체함
+                    loaded_data.groupby(["tier", "division"]).size().reset_index(name="cnt"),
+                    how="left",
+                    on=["tier", "division"],
+                )
+            except Exception as e:
+                print(f"# [ERROR] There is no data, try `resume: false`")
             metadata.fillna({"cnt": 0}, inplace=True)
+
+            # --- make resume recipe ---
             resume_recipe = metadata[["tier", "division", "weight"]].copy()
-            resume_recipe['sample_size'] = metadata.apply(lambda x: x.sample_size - x.cnt, axis=1)
+            resume_recipe["sample_size"] = metadata.apply(lambda x: x.sample_size - x.cnt, axis=1)
+
+            # --- free memory & close connection ---
             del metadata
             conn.close()
             print(f"# [INFO] resume recipe: \n{resume_recipe}")
-        else:            
+        else:
             # --- init metadata ---
-            with open(f"{Path(message.shards_dir).parent}/metadata.csv", "w") as fp:
+            with open(shards_dir.parent / "metadata.csv", "w") as fp:
                 fp.write("tier,division,weight,sample_size\n")
 
         # --- sampling summoners ---
         for recipe in message.recipe:
+            recipe.division = "None" if recipe.division is None else recipe.division
+
+            # --- set sample_size, weight ---
             if message.resume:
-                sample_size = int(resume_recipe[resume_recipe.tier == recipe.tier].sample_size.values[0])
-                if sample_size <= 0: continue
-                weight = resume_recipe[resume_recipe.tier == recipe.tier].weight.values[0]
+                sample_size = int(
+                    resume_recipe[
+                        (resume_recipe.tier == recipe.tier) & (resume_recipe.division == recipe.division)
+                    ].sample_size.values[0]
+                )
+                if sample_size == 0:
+                    continue
+                weight = resume_recipe[
+                    (resume_recipe.tier == recipe.tier) & (resume_recipe.division == recipe.division)
+                ].weight.values[0]
             else:
                 sample_size = int(message.sample_size * recipe.ratio)
                 if sample_size < 30:
                     sample_size = 30
                 weight = recipe.ratio / sample_size
                 # --- update metadata ---
-                with open(f"{Path(message.shards_dir).parent}/metadata.csv", "a") as fp:
-                    fp.write(f"{recipe.tier},{recipe.division if recipe.division else ''},{weight},{sample_size}\n")
-            print(f"# [INFO] sampling summoners: {recipe.tier} {recipe.division if recipe.division else ""} {sample_size} ({weight})")
-            
-            # --- data collect --- TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리   
+                with open(shards_dir.parent / "metadata.csv", "a") as fp:
+                    fp.write(f"{recipe.tier},{recipe.division},{weight},{sample_size}\n")
+            print(f"# [INFO] sampling summoners: {recipe.tier} {recipe.division} {sample_size} ({weight})")
+
+            # --- remove loaded shards if over sample_size ---
+            if sample_size < 0:
+                # --- get parquet file list ---
+                remove_list = loaded_data[
+                    (loaded_data.tier == recipe.tier) & (loaded_data.division == recipe.division)
+                ].summoner_id.tolist()[:-sample_size]
+                print(f"[INFO] Will Remove {len(remove_list)} shards: {recipe.tier} {recipe.division}.")
+
+                # --- remove parquet file ---
+                for summoner_id in remove_list:
+                    file_path = shards_dir / f"{summoner_id}.parquet"
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                        print(f"[INFO] Remove {file_path}.")
+
+            # --- data collect --- TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리
             page = 0
             n_loaded = 0
 
@@ -89,13 +126,19 @@ class Component(base.Component):
                     division=recipe.division,
                     page=page,
                 )
-                if len(league_data) == 0: 
+                if len(league_data) == 0:
                     print(f"# [INFO] no more data: {recipe.tier} {recipe.division if recipe.division else ''} {page}")
                     break
-                random.shuffle(league_data)
+                random.shuffle(league_data)  # shuffle to avoid bias
 
                 for summoner_league in league_data:
-                    summoner_matchids = self.get_summoner_matchids_30d(message.date, summoner_league['puuid'])
+                    # --- if summoner is already collected, skip ---
+                    shard_path = shards_dir / f"{summoner_league['summonerId']}.parquet"
+                    if os.path.exists(shard_path):
+                        continue
+
+                    # --- collect recent 30d match data ---
+                    summoner_matchids = self.get_summoner_matchids_30d(message.date, summoner_league["puuid"])
                     records = []
 
                     for summoner_matchid in summoner_matchids:
@@ -103,23 +146,28 @@ class Component(base.Component):
                             summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_league)
                         except Exception as e:
                             # --- log error ---
-                            with open(Path(message.shards_dir).parent / "error.log", "a") as fp:
+                            with open(shards_dir.parent / "error.log", "a") as fp:
                                 print(f"\t{e}")
                                 fp.write(f"{e}\n")
-                            # --- pass error ---
+                            # --- skip ---
                             continue
-                        if summoner_match_data is None: break
-                        summoner_match_data['tier'] = recipe.tier
-                        summoner_match_data['rank'] = recipe.division
+                        if summoner_match_data is None:
+                            break
+                        summoner_match_data["tier"] = recipe.tier
+                        summoner_match_data["rank"] = recipe.division
                         records.append(summoner_match_data)
-                    
+
                     # --- save to parquet ---
-                    if len(records) == 0: continue  # Fail Case
+                    if len(records) == 0:
+                        continue  # Fail Case, skip
                     df = pd.DataFrame(records)
-                    df.to_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet", index=False)
-                    print(f"# [INFO] ({n_loaded+1}/{sample_size}) insert sampled summoner: {summoner_league['summonerId']} ({len(records)})")
+                    df.to_parquet(shard_path, index=False)
+                    print(
+                        f"# [INFO] ({n_loaded+1}/{sample_size}) insert sampled summoner: {summoner_league['summonerId']} ({len(records)})"
+                    )
                     n_loaded += 1
-                    if n_loaded >= sample_size: break
+                    if n_loaded >= sample_size:
+                        break
 
         return ResponseDataCollect(
             **message.model_dump(),
@@ -130,7 +178,7 @@ class Component(base.Component):
         res = riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division, page=page)
         assert res is not None, f"# [ERROR] Failed to download league data from {queue} {tier} {division}"
         if not division:
-            return res['entries']
+            return res["entries"]
         return res
 
     def get_summoner_league_data(self, summoner_league: dict):
@@ -149,15 +197,13 @@ class Component(base.Component):
     def get_summoner_matchids_30d(self, date: str, puuid: str):
         now = pd.to_datetime(date)
         res = riot_api.get_matchids_by_puuid(
-            puuid=puuid, 
-            startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), 
-            count=100
+            puuid=puuid, startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), count=100
         )
-        while x:= riot_api.get_matchids_by_puuid(
-            puuid=puuid, 
-            startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), 
+        while x := riot_api.get_matchids_by_puuid(
+            puuid=puuid,
+            startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()),
             start=len(res),
-            count=100
+            count=100,
         ):
             res += x
         assert res is not None, f"# [ERROR] Failed to download match ids from {puuid}"
@@ -169,14 +215,12 @@ class Component(base.Component):
 
         # find summoner index
         summoner_index = -1
-        for i, x in enumerate(
-            summoner_match["metadata"]["participants"]
-        ):
+        for i, x in enumerate(summoner_match["metadata"]["participants"]):
             if x == summoner_league["puuid"]:
                 summoner_index = i
                 break
         assert summoner_index != -1, f"Summoner ID {summoner_league['summonerId']} not found in match {matchid}"
-        
+
         try:
             res = {
                 "match_id": matchid,
@@ -238,23 +282,25 @@ class Component(base.Component):
                 "total_ping_count": sum(
                     [v for k, v in summoner_match["info"]["participants"][summoner_index].items() if "Pings" in k]
                 ),
-                "primary_perk_style": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["style"],
-                "primary_perk1": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
+                "primary_perk_style": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0][
+                    "style"
+                ],
+                "primary_perk1": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0][
+                    "selections"
+                ][0]["perk"],
+                "primary_perk2": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0][
+                    "selections"
+                ][1]["perk"],
+                "primary_perk3": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0][
+                    "selections"
+                ][2]["perk"],
+                "sub_perk_style": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["style"],
+                "sub_perk1": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["selections"][
                     0
                 ]["perk"],
-                "primary_perk2": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
+                "sub_perk2": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["selections"][
                     1
                 ]["perk"],
-                "primary_perk3": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][0]["selections"][
-                    2
-                ]["perk"],
-                "sub_perk_style": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["style"],
-                "sub_perk1": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["selections"][0][
-                    "perk"
-                ],
-                "sub_perk2": summoner_match["info"]["participants"][summoner_index]["perks"]["styles"][1]["selections"][1][
-                    "perk"
-                ],
             }
         except Exception as e:
             print(f"# [ERROR] {e}")

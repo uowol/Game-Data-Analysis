@@ -45,7 +45,7 @@ if __name__ == "__main__":
     component = Component()
     message = RequestDuckdbDataUpload(
         duckdb_filepath="data/raw_data.db",
-        shards_dir="data/shards",
+        shards_dir="data/shards/2025-05-14",
     )
     response = component(message)
     print(response)
