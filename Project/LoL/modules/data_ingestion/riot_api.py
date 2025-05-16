@@ -5,13 +5,15 @@ import json
 
 
 def get(url: str):
-    now = time.time()
     response = requests.get(url)
     if response.status_code == 429:
         retry_after = response.headers.get("Retry-After", 60)
         print(f"[ERROR:429] Too many requests, wait {retry_after} sec...")
         time.sleep(int(retry_after) + 1)
         return get(url)
+    elif response.status_code == 403:
+        print(f"[ERROR:403] Forbidden, check your API key or other issues.")
+        return None
     while response.status_code != 200:
         print(f"[ERROR:{response.status_code}] Error, after 30 seconds, retrying")
         time.sleep(30)
@@ -54,7 +56,7 @@ def get_matchtimeline_by_matchid(matchid: str):
     return get(url)
 
 
-def get_league_by_queue_tier_division(queue: str, tier: str, division: str, page:int=1):
+def get_league_by_queue_tier_division(queue: str, tier: str, division: str, page: int = 1):
     if tier == "CHALLENGER":
         url = f"https://kr.api.riotgames.com/lol/league/v4/challengerleagues/by-queue/{queue}?api_key=" + os.getenv(
             "RIOT_KEY"
@@ -68,8 +70,9 @@ def get_league_by_queue_tier_division(queue: str, tier: str, division: str, page
             "RIOT_KEY"
         )
     else:
-        url = f"https://kr.api.riotgames.com/lol/league/v4/entries/{queue}/{tier}/{division}?page={page}&api_key=" + os.getenv(
-            "RIOT_KEY"
+        url = (
+            f"https://kr.api.riotgames.com/lol/league/v4/entries/{queue}/{tier}/{division}?page={page}&api_key="
+            + os.getenv("RIOT_KEY")
         )
     return get(url)
 

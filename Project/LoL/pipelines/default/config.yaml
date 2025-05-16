@@ -1,4 +1,5 @@
 data_collect:
+  date: "2025-05-14"
   queue: RANKED_SOLO_5x5
   shards_dir: data/shards
   sample_size: 10000

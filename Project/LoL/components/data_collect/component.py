@@ -27,6 +27,7 @@ class Component(base.Component):
         global queue_metadata
         queue_metadata_url = "https://static.developer.riotgames.com/docs/lol/queues.json"
         queue_metadata_data = riot_api.get(queue_metadata_url)
+        assert queue_metadata_data is not None, f"[ERROR] Failed to download queue metadata from {queue_metadata_url}"
         queue_metadata_data += [
             {"queueId": 480, "map": "Summoner's Rift", "description": "Normal (Quickplay)", "notes": None},
         ]
@@ -35,13 +36,21 @@ class Component(base.Component):
         # --- make shards directory ---
         os.makedirs(message.shards_dir, exist_ok=True)
 
+        # --- init metadata ---
+        with open(f"{Path(message.shards_dir).parent}/metadata.csv", "w") as fp:
+            fp.write("tier,division,weight,sample_size\n")
+
         # --- sampling summoners ---
         for recipe in message.recipe:
             sample_size = int(message.sample_size * recipe.ratio)
             if sample_size < 30:
                 sample_size = 30
-            weight = recipe.ratio / message.sample_size
+            weight = recipe.ratio / sample_size
             print(f"# [INFO] sampling summoners: {recipe.tier} {recipe.division if recipe.division else ""} {sample_size} ({weight})")    
+
+            # --- update metadata ---
+            with open(f"{Path(message.shards_dir).parent}/metadata.csv", "a") as fp:
+                fp.write(f"{recipe.tier},{recipe.division if recipe.division else ''},{weight},{sample_size}\n")
 
             page = 1
             league_data = self.get_league_data(
@@ -64,20 +73,18 @@ class Component(base.Component):
             # --- data collect ---
             # TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리
             for summoner_league in league_data:
-                summoner_matchids = self.get_summoner_matchids_30d(summoner_league['puuid'])
+                summoner_matchids = self.get_summoner_matchids_30d(message.date, summoner_league['puuid'])
+
                 records = []
-
-                # # NOTE: 임시 코드
-                # if os.path.exists(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet"):
-                #     df = pd.read_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet")
-                #     df['tier'] = recipe.tier
-                #     df['rank'] = recipe.division
-                #     df.to_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet", index=False)
-                #     print(f"# [INFO] insert sampled summoner: {summoner_league['summonerId']} ({len(df)})")
-                #     continue
-
                 for summoner_matchid in summoner_matchids:
-                    summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_league)
+                    try:
+                        summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_league)
+                    except Exception as e:
+                        # --- log error ---
+                        with open(Path(message.shards_dir).parent / "error.log", "a") as fp:
+                            fp.write(f"{e}\n")
+                        # --- pass error ---
+                        continue
                     if summoner_match_data is None: break
                     summoner_match_data['tier'] = recipe.tier
                     summoner_match_data['rank'] = recipe.division
@@ -87,7 +94,6 @@ class Component(base.Component):
                 if len(records) == 0: continue
                 df = pd.DataFrame(records)
                 df.to_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet", index=False)
-
                 print(f"# [INFO] insert sampled summoner: {summoner_league['summonerId']} ({len(records)})")
 
         return ResponseDataCollect(
@@ -97,6 +103,7 @@ class Component(base.Component):
 
     def get_league_data(self, queue: str, tier: str, division: str, page: int = 1):
         res = riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division, page=page)
+        assert res is not None, f"[ERROR] Failed to download league data from {queue} {tier} {division}"
         if not division:
             return res['entries']
         return res
@@ -114,35 +121,26 @@ class Component(base.Component):
             "hot_streak": summoner_league["hotStreak"],
         }
 
-    def get_summoner_data(self, summoner_league: dict):
-        account = riot_api.get_account_by_puuid(summoner_league["puuid"])
-        summoner = riot_api.get_summoner_by_puuid(summoner_league["puuid"])
-        return {
-            "summoner_id": summoner["id"],
-            "puuid": account["puuid"],
-            "game_name": account["gameName"],
-            "game_tag": account["tagLine"],
-        }
-
-    def get_summoner_matchids_30d(self, puuid: str):
+    def get_summoner_matchids_30d(self, date: str, puuid: str):
+        now = pd.to_datetime(date)
         res = riot_api.get_matchids_by_puuid(
             puuid=puuid, 
-            startTime=int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) 
-                - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), 
+            startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), 
             count=100
         )
         while x:= riot_api.get_matchids_by_puuid(
             puuid=puuid, 
-            startTime=int((datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) 
-                - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), 
+            startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), 
             start=len(res),
             count=100
         ):
             res += x
+        assert res is not None, f"[ERROR] Failed to download match ids from {puuid}"
         return res
 
     def get_summoner_match_data(self, matchid: str, summoner_league: dict):
         summoner_match = riot_api.get_match_by_matchid(matchid=matchid)
+        assert summoner_match is not None, f"[ERROR] Failed to download match data from {matchid}"
 
         # find summoner index
         summoner_index = -1
