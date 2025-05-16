@@ -2,12 +2,12 @@ from pydantic import BaseModel
 from typing import List, Dict, Union, Optional
 
 
-class RequestMessage(BaseModel):
-    pass
-
-
 class ResponseMessage(BaseModel):
-    pass
+    result: str  # "success" or "fail"
+
+
+class RequestMessage(BaseModel):
+    upstream_events: List[dict] = []
 
 
 class RecipeItem(BaseModel):
@@ -25,33 +25,43 @@ class RequestDataCollect(RequestMessage):
     resume: bool = False
 
 
-class ResponseDataCollect(RequestDataCollect):
-    result: str  # "success" or "failed"
+class ResponseDataCollect(ResponseMessage, RequestDataCollect):
+    pass
 
 
 class RequestDataDelete(RequestMessage):
-    shards_dir: str
-    tier: str
-    division: Optional[str]
+    shards_dir: Optional[str] = None
+    tier: Optional[str] = None
+    division: Optional[str] = None
 
 
-class ResponseDataDelete(RequestDataDelete):
-    result: str  # "success" or "failed"
+class ResponseDataDelete(ResponseMessage, RequestDataDelete):
+    pass
 
 
 class RequestDuckdbDataUpload(RequestMessage):
-    shards_dir: str
-    duckdb_filepath: str
+    shards_dir: Optional[str] = None
+    duckdb_filepath: Optional[str] = None
 
 
-class ResponseDuckdbDataUpload(RequestDuckdbDataUpload):
-    result: str  # "success" or "failed"
+class ResponseDuckdbDataUpload(ResponseMessage, RequestDuckdbDataUpload):
+    pass
 
 
 class RequestDataAnalyze(RequestMessage):
-    duckdb_filepath: str
-    report_filepath: str
+    duckdb_filepath: Optional[str] = None
+    report_filepath: Optional[str] = None
 
 
-class ResponseDataAnalyze(RequestDataAnalyze):
-    result: str  # "success" or "failed"
+class ResponseDataAnalyze(ResponseMessage, RequestDataAnalyze):
+    pass
+
+
+class RequestDashboardRun(RequestMessage):
+    build: bool = False
+    container_name: Optional[str] = None
+    port: Optional[int] = None
+
+
+class ResponseDashboardRun(ResponseMessage, RequestDashboardRun):
+    pass

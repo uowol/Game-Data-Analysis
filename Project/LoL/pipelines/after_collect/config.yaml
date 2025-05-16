@@ -1,0 +1,9 @@
+data_upload:
+  shards_dir: data/shards/2025-05-14
+  duckdb_filepath: "data/raw_data.db"
+data_analyze:
+  report_filepath: "data/report.db"
+dashboard_run:
+  build: false
+  container_name: metabase-duck
+  port: 3000

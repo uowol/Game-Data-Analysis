@@ -16,6 +16,8 @@ class ComponentType(base.ComponentType):
 
 
 class Component(base.Component):
+    alias = "data_analyze"
+
     def init(self, **config):
         if config:
             self.config = ComponentType(**config)
@@ -44,7 +46,7 @@ class Component(base.Component):
         # NOTE: game_duration 데이터가 오염되었음을 확인, df["game_end_timestamp"] - df["game_start_timestamp"]을 대신 사용해야.
         df["game_duration"] = df["game_end_timestamp"] - df["game_start_timestamp"]
 
-        print(f"[INFO] Load {len(df)} records: {df.summoner_id.nunique()} summoners.")
+        print(f"# [INFO] Load {len(df)} records: {df.summoner_id.nunique()} summoners.")
 
         conn.close()
 
@@ -70,7 +72,7 @@ class Component(base.Component):
 
             d_retention = retained_w / target_total_w if target_total_w else 0
             res.append({"day": d, "retention": d_retention})
-            print(f"[INFO] D-{d} Weighted Retention = {d_retention:.4f}")
+            # print(f"# [INFO] D-{d} Weighted Retention = {d_retention:.4f}")
         retention_df = pd.DataFrame(res)
         conn.execute("CREATE OR REPLACE TABLE retention AS SELECT * FROM retention_df;")
         del retention_df
@@ -140,42 +142,43 @@ class Component(base.Component):
             retained_w = cohort_users.loc[inter].sum()
             churn_rate = 1 - retained_w / cohort_w if cohort_w else 0
             res.append({"day": d, "churn_rate": churn_rate})
-            print(f"[INFO] D-{d} Weighted Churn = {churn_rate:.4f}")
+            # print(f"# [INFO] D-{d} Weighted Churn = {churn_rate:.4f}")
 
         churn_df = pd.DataFrame(res)
         conn.execute("CREATE OR REPLACE TABLE churn_rate AS SELECT * FROM churn_df;")
         del churn_df
 
-        # --- 2.1 Access Rate to New Content ---
-        target_modes = ["CHERRY", "SWIFTPLAY"]
-        target_champ = "Mel"
+        # --- 2.1 Access Rate ---
+        target_modes = df.game_mode.unique()
+        target_champs = df.champion_name.unique()
 
         res_modes = []
         for mode in target_modes:
-            for d in [0, 14, 30]:
+            for d in range(31):
                 day = today - timedelta(days=d)
                 daily = df[df["timestamp"] == day]
                 tot_w = daily.groupby("summoner_id")["w"].mean().sum()
-                new_w = daily[daily["game_mode"] == mode].groupby("summoner_id")["w"].mean().sum()
-                rate = new_w / tot_w if tot_w else 0
-                res_modes.append({"date": day, "mode": mode, "rate": rate})
-                print(f"[INFO] {day} Access '{mode}': {rate:.4f}")
+                play_w = daily[daily["game_mode"] == mode].groupby("summoner_id")["w"].mean().sum()
+                rate = play_w / tot_w if tot_w else 0
+                res_modes.append({"date": day, "mode": mode, "rate": rate, "play": play_w, "total": tot_w})
+                # print(f"# [INFO] {day} Access '{mode}': {rate:.4f}")
 
-        res_champ = []
-        for d in [0, 14, 30]:
-            day = today - timedelta(days=d)
-            daily = df[df["timestamp"] == day]
-            tot_w = daily.groupby("summoner_id")["w"].mean().sum()
-            new_w = daily[daily["champion_name"] == target_champ].groupby("summoner_id")["w"].mean().sum()
-            rate = new_w / tot_w if tot_w else 0
-            res_champ.append({"date": day, "champion": target_champ, "rate": rate})
-            print(f"[INFO] {day} Access '{target_champ}': {rate:.4f}")
+        res_champs = []
+        for target_champ in target_champs:
+            for d in range(31):
+                day = today - timedelta(days=d)
+                daily = df[df["timestamp"] == day]
+                tot_w = daily.groupby("summoner_id")["w"].mean().sum()
+                play_w = daily[daily["champion_name"] == target_champ].groupby("summoner_id")["w"].mean().sum()
+                rate = play_w / tot_w if tot_w else 0
+                res_champs.append({"date": day, "champion": target_champ, "rate": rate, "play": play_w, "total": tot_w})
+                # print(f"# [INFO] {day} Access '{target_champ}': {rate:.4f}")
 
-        access_rate_new_modes_df = pd.DataFrame(res_modes)
-        access_rate_new_champ_df = pd.DataFrame(res_champ)
-        conn.execute("CREATE OR REPLACE TABLE access_rate_new_modes AS SELECT * FROM access_rate_new_modes_df;")
-        conn.execute("CREATE OR REPLACE TABLE access_rate_new_champ AS SELECT * FROM access_rate_new_champ_df;")
-        del access_rate_new_modes_df, access_rate_new_champ_df
+        access_rate_modes_df = pd.DataFrame(res_modes)
+        access_rate_champs_df = pd.DataFrame(res_champs)
+        conn.execute("CREATE OR REPLACE TABLE access_rate_modes AS SELECT * FROM access_rate_modes_df;")
+        conn.execute("CREATE OR REPLACE TABLE access_rate_champs AS SELECT * FROM access_rate_champs_df;")
+        del access_rate_modes_df, access_rate_champs_df
 
         # --- 2.2 Average / Median Play Count per User to New Content ---
         res_modes = []
@@ -191,30 +194,33 @@ class Component(base.Component):
             cum_w = pc_sorted["w"].cumsum()
             median_play = pc_sorted.loc[cum_w >= pc_sorted["w"].sum() / 2, "plays"].iloc[0]
             res_modes.append({"mode": mode, "avg_play_per_user": avg_play, "median_play_per_user": median_play})
-            print(f"[INFO] {mode}  Weighted Avg Play = {avg_play:.2f} | Weighted Median = {median_play}")
+            # print(f"# [INFO] {mode}  Weighted Avg Play = {avg_play:.2f} | Weighted Median = {median_play}")
 
-        res_champ = []
-        pc = (
-            df[df["champion_name"] == target_champ]
-            .groupby("summoner_id")
-            .agg(plays=("champion_name", "size"), w=("w", "mean"))
-        )
-        all_w = df.groupby("summoner_id")["w"].mean()
-        pc = pc.reindex(all_w.index, fill_value=0)
-        pc["w"] = all_w
+        res_champs = []
+        for target_champ in target_champs:
+            pc = (
+                df[df["champion_name"] == target_champ]
+                .groupby("summoner_id")
+                .agg(plays=("champion_name", "size"), w=("w", "mean"))
+            )
+            all_w = df.groupby("summoner_id")["w"].mean()
+            pc = pc.reindex(all_w.index, fill_value=0)
+            pc["w"] = all_w
 
-        avg_play = np.average(pc["plays"], weights=pc["w"])
-        pc_sorted = pc.sort_values("plays")
-        cum_w = pc_sorted["w"].cumsum()
-        median_play = pc_sorted.loc[cum_w >= pc_sorted["w"].sum() / 2, "plays"].iloc[0]
-        res_champ.append({"champion": target_champ, "avg_play_per_user": avg_play, "median_play_per_user": median_play})
-        print(f"[INFO] {target_champ} Weighted Avg Play = {avg_play:.2f} | Weighted Median = {median_play}")
+            avg_play = np.average(pc["plays"], weights=pc["w"])
+            pc_sorted = pc.sort_values("plays")
+            cum_w = pc_sorted["w"].cumsum()
+            median_play = pc_sorted.loc[cum_w >= pc_sorted["w"].sum() / 2, "plays"].iloc[0]
+            res_champs.append(
+                {"champion": target_champ, "avg_play_per_user": avg_play, "median_play_per_user": median_play}
+            )
+            # print(f"# [INFO] {target_champ} Weighted Avg Play = {avg_play:.2f} | Weighted Median = {median_play}")
 
-        avg_play_new_modes_df = pd.DataFrame(res_modes)
-        avg_play_new_champ_df = pd.DataFrame(res_champ)
-        conn.execute("CREATE OR REPLACE TABLE avg_play_new_modes AS SELECT * FROM avg_play_new_modes_df;")
-        conn.execute("CREATE OR REPLACE TABLE avg_play_new_champ AS SELECT * FROM avg_play_new_champ_df;")
-        del avg_play_new_modes_df, avg_play_new_champ_df
+        avg_play_modes_df = pd.DataFrame(res_modes)
+        avg_play_champs_df = pd.DataFrame(res_champs)
+        conn.execute("CREATE OR REPLACE TABLE avg_play_modes AS SELECT * FROM avg_play_modes_df;")
+        conn.execute("CREATE OR REPLACE TABLE avg_play_champs AS SELECT * FROM avg_play_champs_df;")
+        del avg_play_modes_df, avg_play_champs_df
 
         # --- close connection ---
         conn.close()

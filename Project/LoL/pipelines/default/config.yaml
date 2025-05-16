@@ -98,3 +98,7 @@ data_collect:
     - tier: IRON
       division: IV
       ratio: 0.0489
+data_upload:
+  duckdb_filepath: "data/raw_data.db"
+data_analyze:
+  report_filepath: "data/report.db"

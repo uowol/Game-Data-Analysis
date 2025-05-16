@@ -16,6 +16,8 @@ class ComponentType(base.ComponentType):
 
 
 class Component(base.Component):
+    alias = "data_collect"
+
     def init(self, **config):
         if config:
             self.config = ComponentType(**config)
@@ -169,8 +171,10 @@ class Component(base.Component):
                     if n_loaded >= sample_size:
                         break
 
+        res = message.model_dump()
+        res["shards_dir"] = shards_dir.as_posix()
         return ResponseDataCollect(
-            **message.model_dump(),
+            **res,
             result="success",
         )
 

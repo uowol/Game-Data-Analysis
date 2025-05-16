@@ -14,6 +14,8 @@ class ComponentType(base.ComponentType):
 
 
 class Component(base.Component):
+    alias = "data_upload"
+
     def init(self, **config):
         if config:
             self.config = ComponentType(**config)

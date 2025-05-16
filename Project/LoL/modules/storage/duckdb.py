@@ -51,9 +51,16 @@ def docker_run_metabase(container_name="metabase-duck", port=3000):
     )
     if result.stdout.strip():
         # run(["docker", "rm", "-f", container_name])
-        print(f"[INFO] Container {container_name} already exists. Starting it.")
+        print(f"# [INFO] Container {container_name} already exists. Starting it.")
+        run(
+            [
+                "docker",
+                "start",
+                container_name,
+            ]
+        )
     else:
-        print(f"[INFO] Starting new container {container_name}.")
+        print(f"# [INFO] Starting new container {container_name}.")
         run(
             [
                 "docker",
