@@ -3,6 +3,7 @@ data_collect:
   queue: RANKED_SOLO_5x5
   shards_dir: data/shards
   sample_size: 10000
+  resume: true
   recipe:
     - tier: CHALLENGER
       division: Null

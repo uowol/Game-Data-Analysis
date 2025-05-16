@@ -22,6 +22,7 @@ class RequestDataCollect(RequestMessage):
     shards_dir: str
     sample_size: int
     recipe: List[RecipeItem]
+    resume: bool = False
 
 
 class ResponseDataCollect(RequestDataCollect):

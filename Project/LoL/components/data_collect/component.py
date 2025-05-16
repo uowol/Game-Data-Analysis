@@ -1,10 +1,12 @@
 import os
+import random
 import yaml
 import pandas as pd
 from pathlib import Path
 from typing import List
 from datetime import datetime, timedelta
 from components import base
+from modules.storage import duckdb
 from modules.data_ingestion import riot_api
 from components.formats import RequestDataCollect, ResponseDataCollect
 
@@ -27,7 +29,7 @@ class Component(base.Component):
         global queue_metadata
         queue_metadata_url = "https://static.developer.riotgames.com/docs/lol/queues.json"
         queue_metadata_data = riot_api.get(queue_metadata_url)
-        assert queue_metadata_data is not None, f"[ERROR] Failed to download queue metadata from {queue_metadata_url}"
+        assert queue_metadata_data is not None, f"# [ERROR] Failed to download queue metadata from {queue_metadata_url}"
         queue_metadata_data += [
             {"queueId": 480, "map": "Summoner's Rift", "description": "Normal (Quickplay)", "notes": None},
         ]
@@ -35,66 +37,89 @@ class Component(base.Component):
 
         # --- make shards directory ---
         os.makedirs(message.shards_dir, exist_ok=True)
-
-        # --- init metadata ---
-        with open(f"{Path(message.shards_dir).parent}/metadata.csv", "w") as fp:
-            fp.write("tier,division,weight,sample_size\n")
+            
+        # --- if resume is true, skip already collected data ---
+        skip_summoners = []
+        if message.resume:
+            conn = duckdb.get_connection()
+            metadata = pd.read_csv(f"{Path(message.shards_dir).parent}/metadata.csv")
+            metadata = metadata.merge(
+                conn.execute(
+                    f"SELECT DISTINCT summoner_id, tier, rank AS division FROM '{message.shards_dir}/*.parquet'"
+                ).fetchdf().groupby(['tier', 'division']).summoner_id.nunique().reset_index(name='cnt'),
+                how='left', 
+                on=['tier', 'division']
+            )
+            metadata.fillna({"cnt": 0}, inplace=True)
+            resume_recipe = metadata[["tier", "division", "weight"]].copy()
+            resume_recipe['sample_size'] = metadata.apply(lambda x: x.sample_size - x.cnt, axis=1)
+            del metadata
+            conn.close()
+            print(f"# [INFO] resume recipe: \n{resume_recipe}")
+        else:            
+            # --- init metadata ---
+            with open(f"{Path(message.shards_dir).parent}/metadata.csv", "w") as fp:
+                fp.write("tier,division,weight,sample_size\n")
 
         # --- sampling summoners ---
         for recipe in message.recipe:
-            sample_size = int(message.sample_size * recipe.ratio)
-            if sample_size < 30:
-                sample_size = 30
-            weight = recipe.ratio / sample_size
-            print(f"# [INFO] sampling summoners: {recipe.tier} {recipe.division if recipe.division else ""} {sample_size} ({weight})")    
+            if message.resume:
+                sample_size = int(resume_recipe[resume_recipe.tier == recipe.tier].sample_size.values[0])
+                if sample_size <= 0: continue
+                weight = resume_recipe[resume_recipe.tier == recipe.tier].weight.values[0]
+            else:
+                sample_size = int(message.sample_size * recipe.ratio)
+                if sample_size < 30:
+                    sample_size = 30
+                weight = recipe.ratio / sample_size
+                # --- update metadata ---
+                with open(f"{Path(message.shards_dir).parent}/metadata.csv", "a") as fp:
+                    fp.write(f"{recipe.tier},{recipe.division if recipe.division else ''},{weight},{sample_size}\n")
+            print(f"# [INFO] sampling summoners: {recipe.tier} {recipe.division if recipe.division else ""} {sample_size} ({weight})")
+            
+            # --- data collect --- TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리   
+            page = 0
+            n_loaded = 0
 
-            # --- update metadata ---
-            with open(f"{Path(message.shards_dir).parent}/metadata.csv", "a") as fp:
-                fp.write(f"{recipe.tier},{recipe.division if recipe.division else ''},{weight},{sample_size}\n")
-
-            page = 1
-            league_data = self.get_league_data(
-                queue=message.queue,
-                tier=recipe.tier,
-                division=recipe.division,
-                page=page,
-            )
-            while len(league_data) < sample_size:
+            while n_loaded < sample_size:
                 page += 1
-                league_data += self.get_league_data(
+                league_data = self.get_league_data(
                     queue=message.queue,
                     tier=recipe.tier,
                     division=recipe.division,
                     page=page,
                 )
-            # TODO: random sampling
-            league_data = league_data[:sample_size]
-            
-            # --- data collect ---
-            # TODO: league_data의 내용을 바탕으로 removed와 inserted를 구분하고 분기처리
-            for summoner_league in league_data:
-                summoner_matchids = self.get_summoner_matchids_30d(message.date, summoner_league['puuid'])
+                if len(league_data) == 0: 
+                    print(f"# [INFO] no more data: {recipe.tier} {recipe.division if recipe.division else ''} {page}")
+                    break
+                random.shuffle(league_data)
 
-                records = []
-                for summoner_matchid in summoner_matchids:
-                    try:
-                        summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_league)
-                    except Exception as e:
-                        # --- log error ---
-                        with open(Path(message.shards_dir).parent / "error.log", "a") as fp:
-                            fp.write(f"{e}\n")
-                        # --- pass error ---
-                        continue
-                    if summoner_match_data is None: break
-                    summoner_match_data['tier'] = recipe.tier
-                    summoner_match_data['rank'] = recipe.division
-                    records.append(summoner_match_data)
-                
-                # --- save to parquet ---
-                if len(records) == 0: continue
-                df = pd.DataFrame(records)
-                df.to_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet", index=False)
-                print(f"# [INFO] insert sampled summoner: {summoner_league['summonerId']} ({len(records)})")
+                for summoner_league in league_data:
+                    summoner_matchids = self.get_summoner_matchids_30d(message.date, summoner_league['puuid'])
+                    records = []
+
+                    for summoner_matchid in summoner_matchids:
+                        try:
+                            summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_league)
+                        except Exception as e:
+                            # --- log error ---
+                            with open(Path(message.shards_dir).parent / "error.log", "a") as fp:
+                                print(f"\t{e}")
+                                fp.write(f"{e}\n")
+                            # --- pass error ---
+                            continue
+                        if summoner_match_data is None: break
+                        summoner_match_data['tier'] = recipe.tier
+                        summoner_match_data['rank'] = recipe.division
+                        records.append(summoner_match_data)
+                    
+                    # --- save to parquet ---
+                    if len(records) == 0: continue  # Fail Case
+                    df = pd.DataFrame(records)
+                    df.to_parquet(f"{message.shards_dir}/{summoner_league['summonerId']}.parquet", index=False)
+                    print(f"# [INFO] ({n_loaded+1}/{sample_size}) insert sampled summoner: {summoner_league['summonerId']} ({len(records)})")
+                    n_loaded += 1
+                    if n_loaded >= sample_size: break
 
         return ResponseDataCollect(
             **message.model_dump(),
@@ -103,7 +128,7 @@ class Component(base.Component):
 
     def get_league_data(self, queue: str, tier: str, division: str, page: int = 1):
         res = riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division, page=page)
-        assert res is not None, f"[ERROR] Failed to download league data from {queue} {tier} {division}"
+        assert res is not None, f"# [ERROR] Failed to download league data from {queue} {tier} {division}"
         if not division:
             return res['entries']
         return res
@@ -135,12 +160,12 @@ class Component(base.Component):
             count=100
         ):
             res += x
-        assert res is not None, f"[ERROR] Failed to download match ids from {puuid}"
+        assert res is not None, f"# [ERROR] Failed to download match ids from {puuid}"
         return res
 
     def get_summoner_match_data(self, matchid: str, summoner_league: dict):
         summoner_match = riot_api.get_match_by_matchid(matchid=matchid)
-        assert summoner_match is not None, f"[ERROR] Failed to download match data from {matchid}"
+        assert summoner_match is not None, f"# [ERROR] Failed to download match data from {matchid}"
 
         # find summoner index
         summoner_index = -1
