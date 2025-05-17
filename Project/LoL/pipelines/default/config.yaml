@@ -5,51 +5,6 @@ data_collect:
   sample_size: 10000
   resume: true
   recipe:
-    - tier: CHALLENGER
-      division: Null
-      ratio: 0.0001
-    - tier: GRANDMASTER
-      division: Null
-      ratio: 0.0003
-    - tier: MASTER
-      division: Null
-      ratio: 0.0058
-    - tier: DIAMOND
-      division: I
-      ratio: 0.0044
-    - tier: DIAMOND
-      division: II
-      ratio: 0.0051
-    - tier: DIAMOND
-      division: III
-      ratio: 0.0048
-    - tier: DIAMOND
-      division: IV
-      ratio: 0.0127
-    - tier: EMERALD
-      division: I
-      ratio: 0.0167
-    - tier: EMERALD
-      division: II
-      ratio: 0.0138
-    - tier: EMERALD
-      division: III
-      ratio: 0.0204
-    - tier: EMERALD
-      division: IV
-      ratio: 0.0410
-    - tier: PLATINUM
-      division: I
-      ratio: 0.0167
-    - tier: PLATINUM
-      division: II
-      ratio: 0.0256
-    - tier: PLATINUM
-      division: III
-      ratio: 0.0320
-    - tier: PLATINUM
-      division: IV
-      ratio: 0.0545
     - tier: GOLD
       division: I
       ratio: 0.0242
@@ -74,30 +29,6 @@ data_collect:
     - tier: SILVER
       division: IV
       ratio: 0.0652
-    - tier: BRONZE
-      division: I
-      ratio: 0.0339
-    - tier: BRONZE
-      division: II
-      ratio: 0.0460
-    - tier: BRONZE
-      division: III
-      ratio: 0.0485
-    - tier: BRONZE
-      division: IV
-      ratio: 0.0589
-    - tier: IRON
-      division: I
-      ratio: 0.0311
-    - tier: IRON
-      division: II
-      ratio: 0.0439
-    - tier: IRON
-      division: III
-      ratio: 0.0499
-    - tier: IRON
-      division: IV
-      ratio: 0.0489
 data_upload:
   duckdb_filepath: "data/raw_data.db"
 data_analyze:
