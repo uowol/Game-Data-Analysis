@@ -1,5 +1,9 @@
 # ✨ **리그 오브 레전드 데이터 분석 프로젝트**
 
+### Overview
+![image](https://github.com/user-attachments/assets/aaf35526-4737-41fc-9d11-e2ea38f664df)
+
+
 ### Issues
 대부분은 이슈에 정리해두었습니다.
 
