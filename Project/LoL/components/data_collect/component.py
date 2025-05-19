@@ -201,11 +201,15 @@ class Component(base.Component):
     def get_summoner_matchids_30d(self, date: str, puuid: str):
         now = pd.to_datetime(date)
         res = riot_api.get_matchids_by_puuid(
-            puuid=puuid, startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()), count=100
+            puuid=puuid,
+            startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()),
+            endTime=int((now - datetime(1970, 1, 1)).total_seconds()),
+            count=100,
         )
         while x := riot_api.get_matchids_by_puuid(
             puuid=puuid,
             startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()),
+            endTime=int((now - datetime(1970, 1, 1)).total_seconds()),
             start=len(res),
             count=100,
         ):

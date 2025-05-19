@@ -38,9 +38,9 @@ def get_summoner_by_puuid(puuid: str):
     return get(url)
 
 
-def get_matchids_by_puuid(puuid: str, *, startTime: int = 0, start: int = 0, count: int = 20):
+def get_matchids_by_puuid(puuid: str, *, startTime: int = 0, endTime: int = 0, start: int = 0, count: int = 20):
     url = (
-        f"https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?startTime={startTime}&start={start}&count={count}&api_key="
+        f"https://asia.api.riotgames.com/lol/match/v5/matches/by-puuid/{puuid}/ids?startTime={startTime}&endTime={endTime}&start={start}&count={count}&api_key="
         + os.getenv("RIOT_KEY")
     )
     return get(url)

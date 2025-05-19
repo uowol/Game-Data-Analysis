@@ -35,9 +35,7 @@ class Component(base.Component):
         # --- load raw_data as dataframe ---
         conn = duckdb.get_connection(message.duckdb_filepath)
 
-        df = conn.execute(
-            "SELECT * FROM raw_summoner_game_logs where game_start_timestamp >= DATE '2025-04-14';"
-        ).fetchdf()
+        df = conn.execute("SELECT * FROM raw_summoner_game_logs;").fetchdf()
         df["timestamp"] = df["game_start_timestamp"].apply(lambda x: x.date())
         df["division"] = df["rank"].fillna("None")
         df["w"] = list(df.apply(lambda r: weight_map.get((r["tier"], r["division"]), 1.0), axis=1))
