@@ -199,17 +199,22 @@ class Component(base.Component):
         }
 
     def get_summoner_matchids_30d(self, date: str, puuid: str):
-        now = pd.to_datetime(date)
+        target_date = pd.to_datetime(date)
+        assert (
+            target_date.date() < datetime.now().date()
+        ), "# [ERROR] only data up to the day before today can be collected."
+        start_dt = target_date - timedelta(days=30) - datetime(1970, 1, 1)
+        end_dt = target_date.replace(hour=23, minute=59, second=59) - datetime(1970, 1, 1)
         res = riot_api.get_matchids_by_puuid(
             puuid=puuid,
-            startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()),
-            endTime=int((now - datetime(1970, 1, 1)).total_seconds()),
+            startTime=int(start_dt.total_seconds()),
+            endTime=int(end_dt.total_seconds()),
             count=100,
         )
         while x := riot_api.get_matchids_by_puuid(
             puuid=puuid,
-            startTime=int((now - timedelta(days=30) - datetime(1970, 1, 1)).total_seconds()),
-            endTime=int((now - datetime(1970, 1, 1)).total_seconds()),
+            startTime=int(start_dt.total_seconds()),
+            endTime=int(end_dt.total_seconds()),
             start=len(res),
             count=100,
         ):
