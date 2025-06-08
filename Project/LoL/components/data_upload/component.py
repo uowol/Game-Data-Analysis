@@ -36,7 +36,10 @@ class Component(base.Component):
             conn.execute(f"DROP TABLE {table};")
         print(f"# [INFO] create table: {table}")
         duckdb.excute_query(conn, self.config["query"]["create"]["table"][table])
-        duckdb.excute_query(conn, self.config["query"]["insert"][table].format(f"{message.shards_dir}/*.parquet"))
+        duckdb.excute_query(conn, self.config["query"]["insert"][table].format(f"{message.chunks_dir}/{message.date}/*.parquet"))
+        
+        # --- close connection ---
+        conn.close()
 
         return ResponseDuckdbDataUpload(
             **message.model_dump(),
@@ -49,7 +52,7 @@ if __name__ == "__main__":
     component = Component()
     message = RequestDuckdbDataUpload(
         duckdb_filepath="data/raw_data.db",
-        shards_dir="data/shards/2025-05-14",
+        chunks_dir="data/chunks/2025-05-14",
     )
     response = component(message)
     print(response)

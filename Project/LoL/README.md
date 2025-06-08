@@ -1,5 +1,29 @@
 # ✨ **리그 오브 레전드 데이터 분석 프로젝트**
 
+### 실행
+
+> dockerfile을 이용한 dev-container 환경을 제공합니다. 하지만, metabase 컨테이너 빌드/실행을 위해선 로컬에서 진행해주세요.
+
+1. docker build and run metabase image for create dashboard
+  ```sh
+  docker build metabase/. --tag metaduck:latest
+  docker run --name metaduck -d -p 3000:3000 -m 2GB -e MB_PLUGINS_DIR=/home/plugins -v ./data:/home/data metaduck
+  ```
+2. set RIOT API key
+  ```sh
+  # .env
+  RIOT_KEY={your_api_key}
+  ```
+3. install dependencies
+  ```sh
+  poetry install
+  ```
+4. run pipeline
+  ```sh
+  poetry run python -m scripts.run_pipeline --pipeline_path pipelines/default/pipeline.py --config_path pipelines/default/config.yaml
+  ```
+
+
 ### Metabase로 구성한 Dashboard 화면
 ![image](https://github.com/user-attachments/assets/254ea8ce-066e-49dc-8d24-f7e41dbe6a70)
 

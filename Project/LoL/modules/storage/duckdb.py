@@ -36,7 +36,7 @@ def ls_table(conn, verbose=False):
 
 def docker_build_metabase():
     # docker build metabase/. --tag metaduck:latest
-    subprocess.run(["docker", "build", "../../metabase/.", "--tag", "metaduck:latest"], check=True)
+    subprocess.run(["docker", "build", "metabase/.", "--tag", "metaduck:latest"], check=True)
 
 
 def docker_run_metabase(container_name="metabase-duck", port=3000):

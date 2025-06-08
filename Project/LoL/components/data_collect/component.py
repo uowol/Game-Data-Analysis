@@ -37,19 +37,19 @@ class Component(base.Component):
         ]
         queue_metadata = pd.DataFrame(queue_metadata_data, columns=["queueId", "map", "description", "notes"])
 
-        # --- make shards directory ---
-        shards_dir = Path(message.shards_dir) / message.date  # {shard_dir}/{date}
-        os.makedirs(shards_dir, exist_ok=True)
+        # --- make chunks directory ---
+        chunks_dir = Path(message.chunks_dir) / message.date  # {shard_dir}/{date}
+        os.makedirs(chunks_dir, exist_ok=True)
 
         # --- if resume is true, skip already collected data ---
         if message.resume:
             # --- get connection ---
             conn = duckdb.get_connection()
 
-            # --- check loaded shards ---
-            metadata = pd.read_csv(shards_dir.parent.parent / "metadata.csv", keep_default_na=False)
+            # --- check loaded chunks ---
+            metadata = pd.read_csv(chunks_dir.parent.parent / "metadata.csv", keep_default_na=False)
             loaded_data = conn.execute(
-                f"SELECT DISTINCT summoner_id, tier, COALESCE(rank, 'None') AS division FROM '{shards_dir.as_posix()}/*.parquet'"
+                f"SELECT DISTINCT summoner_id, tier, COALESCE(rank, 'None') AS division FROM '{chunks_dir.as_posix()}/*.parquet'"
             ).fetchdf()
             try:
                 metadata = metadata.merge(
@@ -72,7 +72,7 @@ class Component(base.Component):
             print(f"# [INFO] resume recipe: \n{resume_recipe}")
         else:
             # --- init metadata ---
-            with open(shards_dir.parent / "metadata.csv", "w") as fp:
+            with open(chunks_dir.parent / "metadata.csv", "w") as fp:
                 fp.write("tier,division,weight,sample_size\n")
 
         # --- sampling summoners ---
@@ -97,21 +97,21 @@ class Component(base.Component):
                     sample_size = 30
                 weight = recipe.ratio / sample_size
                 # --- update metadata ---
-                with open(shards_dir.parent / "metadata.csv", "a") as fp:
+                with open(chunks_dir.parent / "metadata.csv", "a") as fp:
                     fp.write(f"{recipe.tier},{recipe.division},{weight},{sample_size}\n")
             print(f"# [INFO] sampling summoners: {recipe.tier} {recipe.division} {sample_size} ({weight})")
 
-            # --- remove loaded shards if over sample_size ---
+            # --- remove loaded chunks if over sample_size ---
             if sample_size < 0:
                 # --- get parquet file list ---
                 remove_list = loaded_data[
                     (loaded_data.tier == recipe.tier) & (loaded_data.division == recipe.division)
                 ].summoner_id.tolist()[:-sample_size]
-                print(f"\t[INFO] Will Remove {len(remove_list)} shards: {recipe.tier} {recipe.division}.")
+                print(f"\t[INFO] Will Remove {len(remove_list)} chunks: {recipe.tier} {recipe.division}.")
 
                 # --- remove parquet file ---
                 for summoner_id in remove_list:
-                    file_path = shards_dir / f"{summoner_id}.parquet"
+                    file_path = chunks_dir / f"{summoner_id}.parquet"
                     if os.path.exists(file_path):
                         os.remove(file_path)
                         print(f"\t[INFO] Remove {file_path}.")
@@ -135,7 +135,7 @@ class Component(base.Component):
 
                 for summoner_league in league_data:
                     # --- if summoner is already collected, skip ---
-                    shard_path = shards_dir / f"{summoner_league['summonerId']}.parquet"
+                    shard_path = chunks_dir / f"{summoner_league['summonerId']}.parquet"
                     if os.path.exists(shard_path):
                         continue
 
@@ -148,7 +148,7 @@ class Component(base.Component):
                             summoner_match_data = self.get_summoner_match_data(summoner_matchid, summoner_league)
                         except Exception as e:
                             # --- log error ---
-                            with open(shards_dir.parent / "error.log", "a") as fp:
+                            with open(chunks_dir.parent / "error.log", "a") as fp:
                                 print(f"\t{e}")
                                 fp.write(f"{e}\n")
                             # --- skip ---
@@ -171,17 +171,15 @@ class Component(base.Component):
                     if n_loaded >= sample_size:
                         break
 
-        res = message.model_dump()
-        res["shards_dir"] = shards_dir.as_posix()
         return ResponseDataCollect(
-            **res,
+            **message.model_dump(),
             result="success",
         )
 
     def get_league_data(self, queue: str, tier: str, division: str, page: int = 1):
         res = riot_api.get_league_by_queue_tier_division(queue=queue, tier=tier, division=division, page=page)
         assert res is not None, f"# [ERROR] Failed to download league data from {queue} {tier} {division}"
-        if not division:
+        if division is None or division == "None":
             return res["entries"]
         return res
 

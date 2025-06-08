@@ -19,7 +19,7 @@ class RecipeItem(BaseModel):
 class RequestDataCollect(RequestMessage):
     date: str
     queue: str
-    shards_dir: str
+    chunks_dir: str
     sample_size: int
     recipe: List[RecipeItem]
     resume: bool = False
@@ -30,7 +30,7 @@ class ResponseDataCollect(ResponseMessage, RequestDataCollect):
 
 
 class RequestDataDelete(RequestMessage):
-    shards_dir: Optional[str] = None
+    chunks_dir: Optional[str] = None
     tier: Optional[str] = None
     division: Optional[str] = None
 
@@ -40,7 +40,8 @@ class ResponseDataDelete(ResponseMessage, RequestDataDelete):
 
 
 class RequestDuckdbDataUpload(RequestMessage):
-    shards_dir: Optional[str] = None
+    date: str
+    chunks_dir: Optional[str] = None
     duckdb_filepath: Optional[str] = None
 
 

@@ -28,7 +28,7 @@ class Component(base.Component):
 
     def call(self, message: RequestDataAnalyze, *args, **kwargs) -> ResponseDataAnalyze:
         # --- load metadata(tier, weight) ---
-        weight_df = pd.read_csv(Path(message.duckdb_filepath).parent / "metadata.csv", keep_default_na=False)
+        weight_df = pd.read_csv(Path(message.duckdb_filepath).parent / "chunks" / "metadata.csv", keep_default_na=False)
         weight_df["key"] = list(zip(weight_df["tier"], weight_df["division"].fillna("None")))
         weight_map = dict(zip(weight_df["key"], weight_df["weight"]))
 

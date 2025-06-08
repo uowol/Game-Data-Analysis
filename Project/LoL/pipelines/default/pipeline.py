@@ -42,7 +42,7 @@ class Pipeline(base.Pipeline):
         if self.config.data_upload is not None:
             request_message = RequestDuckdbDataUpload(
                 upstream_events=upstream_events,
-                shards_dir=self.config.data_upload.shards_dir,
+                chunks_dir=self.config.data_upload.chunks_dir,
                 duckdb_filepath=self.config.data_upload.duckdb_filepath,
             )
             response_message = exec_component(DataUploadComponent(), request_message)

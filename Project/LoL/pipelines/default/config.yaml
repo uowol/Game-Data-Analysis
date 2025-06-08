@@ -1,9 +1,9 @@
 data_collect:
-  date: "2025-05-14"
+  date: "2025-06-07"
   queue: RANKED_SOLO_5x5
-  shards_dir: data/shards
+  chunks_dir: data/chunks
   sample_size: 10000
-  resume: true
+  resume: false
   recipe:
     - tier: CHALLENGER
       division: Null
@@ -102,3 +102,7 @@ data_upload:
   duckdb_filepath: "data/raw_data.db"
 data_analyze:
   report_filepath: "data/report.db"
+dashboard_run:
+  build: false
+  container_name: metaduck
+  port: 3000

@@ -32,17 +32,17 @@ class Component(base.Component):
         # --- get parquet file list ---
         remove_list = (
             conn.execute(
-                f"SELECT summoner_id FROM '{message.shards_dir}/*.parquet' WHERE tier='{message.tier}' AND rank='{message.division}'"
+                f"SELECT summoner_id FROM '{message.chunks_dir}/*.parquet' WHERE tier='{message.tier}' AND rank='{message.division}'"
             )
             .fetchdf()
             .summoner_id.unique()
             .tolist()
         )
-        print(f"[INFO] Will Remove {len(remove_list)} shards: {message.tier} {message.division}.")
+        print(f"[INFO] Will Remove {len(remove_list)} chunks: {message.tier} {message.division}.")
 
         # --- remove parquet file ---
         for summoner_id in remove_list:
-            file_path = Path(message.shards_dir) / f"{summoner_id}.parquet"
+            file_path = Path(message.chunks_dir) / f"{summoner_id}.parquet"
             if os.path.exists(file_path):
                 os.remove(file_path)
                 print(f"[INFO] Remove {file_path}.")
@@ -57,7 +57,7 @@ if __name__ == "__main__":
     # test
     component = Component()
     message = RequestDataDelete(
-        shards_dir="data/shards",
+        chunks_dir="data/chunks",
         tier="EMERALD",
         division="III",
     )
