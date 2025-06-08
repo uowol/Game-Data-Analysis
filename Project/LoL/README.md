@@ -7,7 +7,7 @@
 1. docker build and run metabase image for create dashboard
   ```sh
   docker build metabase/. --tag metaduck:latest
-  docker run --name metaduck -d -p 3000:3000 -m 2GB -e MB_PLUGINS_DIR=/home/plugins -v ./data:/home/data metaduck
+  docker run --name metaduck -d -p 3000:3000 -m 2GB -e MB_PLUGINS_DIR=/home/plugins -v {your_base_dir}/data:/home/data metaduck
   ```
 2. set RIOT API key
   ```sh
